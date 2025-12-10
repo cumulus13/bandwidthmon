@@ -8,9 +8,9 @@ path = "src/bandwidthmon2.rs"
 
 [package]
 name = "bandwidthmon"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "0.1.7"
 authors = [ "Hadi Cahyadi <cumulus13@gmail.com>",]
 description = "Real-time network bandwidth monitor with beautiful ASCII charts"
 license = "MIT"
@@ -30,7 +30,7 @@ anyhow = "1.0"
 ctrlc = "3.4"
 
 [dependencies.clap]
-version = "4.5"
+version = "0.1.7"
 features = [ "derive", "color", "suggestions",]
 
 [profile.release]
@@ -57,5 +57,5 @@ libc = "0.2"
 [target."cfg(target_os = \"windows\")".dependencies]
 
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.59"
+version = "0.1.7"
 features = [ "Win32_Foundation", "Win32_System_Console",]
