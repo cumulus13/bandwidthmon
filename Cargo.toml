@@ -1,26 +1,50 @@
-[[bin]]
-name = "bandwidthmon"
-path = "src/bandwidthmon.rs"
-
-[[bin]]
-name = "bandwidthmon2"
-path = "src/bandwidthmon2.rs"
+bin = [
+    { name = "bandwidthmon", path = "src/bandwidthmon.rs" },
+    { name = "bandwidthmon2", path = "src/bandwidthmon2.rs" },
+]
 
 [package]
 name = "bandwidthmon"
-version = "0.1.7"
+version = "0.1.9"
 edition = "2021"
 rust-version = "1.70"
-authors = [ "Hadi Cahyadi <cumulus13@gmail.com>",]
+authors = [
+    "Hadi Cahyadi <cumulus13@gmail.com>",
+]
 description = "Real-time network bandwidth monitor with beautiful ASCII charts"
 license = "MIT"
 repository = "https://github.com/cumulus13/bandwidthmon"
 homepage = "https://github.com/cumulus13/bandwidthmon"
 documentation = "https://docs.rs/bandwidthmon"
-keywords = [ "network", "bandwidth", "monitor", "terminal", "cli",]
-categories = [ "command-line-utilities", "network-programming",]
+keywords = [
+    "network",
+    "bandwidth",
+    "monitor",
+    "terminal",
+    "cli",
+]
+categories = [
+    "command-line-utilities",
+    "network-programming",
+]
 readme = "README.md"
-exclude = [ ".github/*", ".gitignore", "build.sh", "build.bat", "CHANGELOG.md", "DEPLOYMENT_GUIDE.md", "FIXED_APPLIED.md", "FLICKER_FIX.md", "PROJECT_STRUCTURE.md", "PUBLISH.md", "SMOOTH_RENDERING.md", "bandwidthmon.exe", "bandwidthmon2.exe", "bandwidthmon.sublime-project", "bandwidthmon.sublime-workspace",]
+exclude = [
+    ".github/*",
+    ".gitignore",
+    "build.sh",
+    "build.bat",
+    "CHANGELOG.md",
+    "DEPLOYMENT_GUIDE.md",
+    "FIXED_APPLIED.md",
+    "FLICKER_FIX.md",
+    "PROJECT_STRUCTURE.md",
+    "PUBLISH.md",
+    "SMOOTH_RENDERING.md",
+    "bandwidthmon.exe",
+    "bandwidthmon2.exe",
+    "bandwidthmon.sublime-project",
+    "bandwidthmon.sublime-workspace",
+]
 
 [dependencies]
 sysinfo = "0.32"
@@ -31,7 +55,11 @@ ctrlc = "3.4"
 
 [dependencies.clap]
 version = "4.5"
-features = [ "derive", "color", "suggestions",]
+features = [
+    "derive",
+    "color",
+    "suggestions",
+]
 
 [profile.release]
 opt-level = 3
@@ -58,4 +86,7 @@ libc = "0.2"
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.59"
-features = [ "Win32_Foundation", "Win32_System_Console",]
+features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+]
