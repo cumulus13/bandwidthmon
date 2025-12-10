@@ -10,6 +10,10 @@ Real-time network bandwidth monitor with beautiful ASCII charts for the terminal
   <img src="https://raw.githubusercontent.com/cumulus13/bandwidthmon/master/bandwidthmon1.png" alt="Bandwidthmon Line">
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/cumulus13/bandwidthmon/master/bandwidthmon2.png" alt="Bandwidthmon Graph">
+</p>
+
 
 ## Features
 

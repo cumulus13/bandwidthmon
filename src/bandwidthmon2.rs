@@ -83,6 +83,7 @@ struct NetworkMonitor {
     history_ul: VecDeque<f64>,
     prev_rx: u64,
     prev_tx: u64,
+    prev_time: Instant,  // FIX: Track waktu untuk perhitungan akurat
     start_time: Instant,
     peak_dl: f64,
     peak_ul: f64,
@@ -104,6 +105,8 @@ impl NetworkMonitor {
             .map(|data| (data.total_received(), data.total_transmitted()))
             .unwrap_or((0, 0));
 
+        let now = Instant::now();
+
         Ok(Self {
             interface,
             networks,
@@ -111,7 +114,8 @@ impl NetworkMonitor {
             history_ul: VecDeque::with_capacity(history_size),
             prev_rx,
             prev_tx,
-            start_time: Instant::now(),
+            prev_time: now,  // FIX: Inisialisasi prev_time
+            start_time: now,
             peak_dl: 0.0,
             peak_ul: 0.0,
             avg_dl: 0.0,
@@ -130,15 +134,31 @@ impl NetworkMonitor {
 
         let cur_rx = data.total_received();
         let cur_tx = data.total_transmitted();
+        let cur_time = Instant::now();
+
+        // FIX: Hitung waktu elapsed yang sebenarnya
+        let elapsed = cur_time.duration_since(self.prev_time).as_secs_f64();
+        
+        // FIX: Hindari division by zero
+        if elapsed < 0.001 {
+            return Ok(BandwidthStats {
+                download_bps: 0.0,
+                upload_bps: 0.0,
+                total_rx: cur_rx,
+                total_tx: cur_tx,
+            });
+        }
 
         let dl_bytes = cur_rx.saturating_sub(self.prev_rx);
         let ul_bytes = cur_tx.saturating_sub(self.prev_tx);
 
-        let dl_bps = dl_bytes as f64;
-        let ul_bps = ul_bytes as f64;
+        // FIX: Konversi ke bytes per second yang AKURAT
+        let dl_bps = (dl_bytes as f64) / elapsed;
+        let ul_bps = (ul_bytes as f64) / elapsed;
 
         self.prev_rx = cur_rx;
         self.prev_tx = cur_tx;
+        self.prev_time = cur_time;  // FIX: Update prev_time
 
         // Update history
         if self.history_dl.len() >= self.history_dl.capacity() {
@@ -293,9 +313,9 @@ fn color_to_256(color: Color) -> u8 {
     }
 }
 
-/// Manual graph rendering with smooth box-drawing characters
+/// FIX: Improved graph rendering with proper alignment and smooth gradients
 fn render_chart(data: &[f64], height: usize, width: usize, color: Color) -> String {
-    if data.is_empty() {
+    if data.is_empty() || height == 0 || width == 0 {
         return String::new();
     }
 
@@ -322,33 +342,67 @@ fn render_chart(data: &[f64], height: usize, width: usize, color: Color) -> Stri
         max_val - min_val
     };
 
+    // FIX: Use better block characters for smooth gradient effect
+    const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    
     // Initialize canvas with spaces
     let mut canvas: Vec<Vec<char>> = vec![vec![' '; width]; height];
 
-    // Scale and plot data points
-    let scale = (height - 1) as f64 / range;
+    // Scale and plot data points with sub-character resolution
+    let scale = (height as f64) / range;
 
     for (x, &value) in plot_data.iter().enumerate() {
         if !value.is_finite() {
             continue;
         }
 
-        // Calculate y position (inverted, 0 is top)
-        let y = ((max_val - value) * scale).round() as usize;
-        let y = y.min(height - 1);
-
-        // Use block characters for smooth rendering
-        canvas[y][x] = '█';
+        // Calculate precise y position (inverted, 0 is top)
+        let normalized = (value - min_val) / range;
+        let y_float = (1.0 - normalized) * (height as f64);
+        
+        // Get integer and fractional parts for smooth rendering
+        let y_int = y_float.floor() as usize;
+        let y_frac = y_float - y_float.floor();
+        
+        // Main block
+        if y_int < height {
+            canvas[y_int][x] = '█';
+        }
+        
+        // Fill below with full blocks
+        for y in (y_int + 1)..height {
+            canvas[y][x] = '█';
+        }
+        
+        // Add gradient block at the top if there's fractional part
+        if y_int > 0 && y_frac > 0.1 {
+            let prev_y = y_int - 1;
+            if canvas[prev_y][x] == ' ' {
+                let block_idx = ((1.0 - y_frac) * 8.0) as usize;
+                canvas[prev_y][x] = BLOCKS[block_idx.min(8)];
+            }
+        }
     }
 
-    // Add Y-axis labels
-    let label_max = format!("{:>8.2}", max_val);
-    let label_min = format!("{:>8.2}", min_val);
-    let label_mid = format!("{:>8.2}", (max_val + min_val) / 2.0);
+    // FIX: Format labels with consistent width for perfect alignment
+    let format_label = |val: f64| -> String {
+        if val >= 1_000_000.0 {
+            format!("{:>6.1}M", val / 1_000_000.0)
+        } else if val >= 1_000.0 {
+            format!("{:>6.1}K", val / 1_000.0)
+        } else {
+            format!("{:>7.1}", val)
+        }
+    };
+
+    let label_max = format_label(max_val);
+    let label_min = format_label(min_val);
+    let label_mid = format_label((max_val + min_val) / 2.0);
 
     let color_code = color_to_256(color);
     let mut output = String::new();
 
+    // FIX: Use ASCII pipe character for perfect vertical alignment
     for (row_idx, row) in canvas.iter().enumerate() {
         let label = if row_idx == 0 {
             &label_max
@@ -357,12 +411,13 @@ fn render_chart(data: &[f64], height: usize, width: usize, color: Color) -> Stri
         } else if row_idx == height / 2 {
             &label_mid
         } else {
-            "        "
+            "       " // 7 spaces to match label width
         };
 
         let line: String = row.iter().collect();
+        // FIX: Use simple ASCII '|' for vertical line - always aligned
         output.push_str(&format!(
-            "{} \x1b[38;5;{}m│{}\x1b[0m\n",
+            "{} \x1b[38;5;{}m|{}\x1b[0m\n",
             label, color_code, line
         ));
     }
@@ -395,7 +450,7 @@ fn render_ui(
 
     // Current speeds
     output.push_str(&format!(
-        "{} {}  │  {} {} {}\n",
+        "{} {}  │  {} {}  {}\n",
         style_text("Download:", Color::Cyan, true),
         style_text(&format_bytes(stats.download_bps), Color::White, false),
         style_text("Upload:", Color::Yellow, true),
@@ -438,10 +493,6 @@ fn render_ui(
     let show_both = !args.download && !args.upload;
 
     if args.download || show_both {
-        // output.push_str(&format!(
-        //     "{}\n",
-        //     style_text("DOWNLOAD", Color::Cyan, true)
-        // ));
         let dl_history = monitor.get_history_dl();
         if !dl_history.is_empty() {
             let chart = render_chart(&dl_history, args.height, chart_width, Color::Cyan);
@@ -453,21 +504,12 @@ fn render_ui(
         if show_both {
             output.push('\n');
         }
-        // output.push_str(&format!(
-        //     "{}\n",
-        //     style_text("UPLOAD", Color::Yellow, true)
-        // ));
         let ul_history = monitor.get_history_ul();
         if !ul_history.is_empty() {
             let chart = render_chart(&ul_history, args.height, chart_width, Color::Yellow);
             output.push_str(&chart);
         }
     }
-
-    // output.push_str(&format!(
-    //     "\n{}\n",
-    //     style_text("Press 'q' or Ctrl+C to quit", Color::DarkGrey, false)
-    // ));
 
     Ok(output)
 }
@@ -503,7 +545,6 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
                     match key_event.code {
                         KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
                         KeyCode::Char('c') => {
-                            // Check for Ctrl+C
                             use crossterm::event::KeyModifiers;
                             if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                                 break;
@@ -514,22 +555,7 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
                 }
             }
 
-            // Update bandwidth stats
-            // if last_update.elapsed() >= INTERVAL {
-            //     let stats = monitor.update()?;
-            //     let (term_width, _) = size()?;
-            //     let ui = render_ui(&monitor, &stats, &args, term_width)?;
-
-            //     execute!(
-            //         stdout,
-            //         MoveTo(0, 0),
-            //         Clear(ClearType::All),
-            //         Print(&ui)
-            //     )?;
-            //     stdout.flush()?;
-
-            //     last_update = Instant::now();
-            // }
+            // FIX: Update bandwidth stats dengan timing yang akurat
             if last_update.elapsed() >= INTERVAL {
                 let stats = monitor.update()?;
                 let (term_width, term_height) = size()?;

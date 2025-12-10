@@ -85,16 +85,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: bandwidthmon
-            asset_name: bandwidthmon-linux-amd64
+            binary1_name: bandwidthmon
+            binary2_name: bandwidthmon2
+            asset_prefix: linux-amd64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: bandwidthmon.exe
-            asset_name: bandwidthmon-windows-amd64.exe
+            binary1_name: bandwidthmon.exe
+            binary2_name: bandwidthmon2.exe
+            asset_prefix: windows-amd64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: bandwidthmon
-            asset_name: bandwidthmon-macos-amd64
+            binary1_name: bandwidthmon
+            binary2_name: bandwidthmon2
+            asset_prefix: macos-amd64
     steps:
     - uses: actions/checkout@v4
     
@@ -106,12 +109,20 @@ jobs:
     - name: Build release
       run: cargo build --release --target ${{ matrix.target }}
 
-    - name: Strip binary (Linux/macOS)
+    - name: Strip binaries (Linux/macOS)
       if: matrix.os != 'windows-latest'
-      run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+      run: |
+        strip target/${{ matrix.target }}/release/${{ matrix.binary1_name }}
+        strip target/${{ matrix.target }}/release/${{ matrix.binary2_name }}
 
-    - name: Upload artifact
+    - name: Upload bandwidthmon
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.asset_name }}
-        path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+        name: bandwidthmon-${{ matrix.asset_prefix }}
+        path: target/${{ matrix.target }}/release/${{ matrix.binary1_name }}
+
+    - name: Upload bandwidthmon2
+      uses: actions/upload-artifact@v4
+      with:
+        name: bandwidthmon2-${{ matrix.asset_prefix }}
+        path: target/${{ matrix.target }}/release/${{ matrix.binary2_name }}

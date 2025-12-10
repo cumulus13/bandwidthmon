@@ -24,7 +24,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::Networks;
 
-const INTERVAL: Duration = Duration::from_secs(1);
+// const INTERVAL: Duration = Duration::from_secs(1);
+const INTERVAL: Duration = Duration::from_millis(500);
 const DEFAULT_HISTORY: usize = 120;
 const DEFAULT_HEIGHT: usize = 10;
 
@@ -33,7 +34,7 @@ const DEFAULT_HEIGHT: usize = 10;
     name = "bandwidthmon",
     version,
     author = "Hadi Cahyadi <cumulus13@gmail.com>",
-    about = "Real-time network bandwidth monitor with ASCII charts"
+    about = "Real-time network bandwidth monitor with ASCII charts by Hadi Cahyadi <cumulus13@gmail.com>"
 )]
 struct Args {
     /// Network interface to monitor (auto-select if not specified)
@@ -84,6 +85,7 @@ struct NetworkMonitor {
     history_ul: VecDeque<f64>,
     prev_rx: u64,
     prev_tx: u64,
+    prev_time: Instant,  // FIX: Track waktu untuk perhitungan akurat
     start_time: Instant,
     peak_dl: f64,
     peak_ul: f64,
@@ -105,6 +107,8 @@ impl NetworkMonitor {
             .map(|data| (data.total_received(), data.total_transmitted()))
             .unwrap_or((0, 0));
 
+        let now = Instant::now();
+        
         Ok(Self {
             interface,
             networks,
@@ -112,7 +116,8 @@ impl NetworkMonitor {
             history_ul: VecDeque::with_capacity(history_size),
             prev_rx,
             prev_tx,
-            start_time: Instant::now(),
+            prev_time: now,  // FIX: Inisialisasi prev_time
+            start_time: now,
             peak_dl: 0.0,
             peak_ul: 0.0,
             avg_dl: 0.0,
@@ -131,17 +136,33 @@ impl NetworkMonitor {
 
         let cur_rx = data.total_received();
         let cur_tx = data.total_transmitted();
+        let cur_time = Instant::now();
+
+        // FIX: Hitung waktu elapsed yang sebenarnya
+        let elapsed = cur_time.duration_since(self.prev_time).as_secs_f64();
+        
+        // FIX: Hindari division by zero
+        if elapsed < 0.001 {
+            return Ok(BandwidthStats {
+                download_bps: 0.0,
+                upload_bps: 0.0,
+                total_rx: cur_rx,
+                total_tx: cur_tx,
+            });
+        }
 
         let dl_bytes = cur_rx.saturating_sub(self.prev_rx);
         let ul_bytes = cur_tx.saturating_sub(self.prev_tx);
 
-        let dl_bps = dl_bytes as f64;
-        let ul_bps = ul_bytes as f64;
+        // FIX: Konversi ke bytes per second yang AKURAT
+        let dl_bps = (dl_bytes as f64) / elapsed;
+        let ul_bps = (ul_bytes as f64) / elapsed;
 
         self.prev_rx = cur_rx;
         self.prev_tx = cur_tx;
+        self.prev_time = cur_time;  // FIX: Update prev_time
 
-        // Update history
+        // FIX: Update history dengan mekanisme yang benar
         if self.history_dl.len() >= self.history_dl.capacity() {
             self.history_dl.pop_front();
         }
@@ -301,10 +322,11 @@ fn render_ui(
     term_width: u16,
 ) -> Result<String> {
     let mut output = String::new();
+    let min_chart_width = 10;
     let chart_width = if args.width > 0 {
-        args.width
+        args.width.clamp(min_chart_width, term_width.saturating_sub(10).max(20) as usize)
     } else {
-        term_width.saturating_sub(15) as usize
+        term_width.saturating_sub(15).max(20) as usize
     };
 
     // Header
@@ -367,20 +389,10 @@ fn render_ui(
     let show_both = !args.download && !args.upload;
 
     if args.download || show_both {
-        // output.push_str(&format!(
-        //     "{}\n",
-        //     style_text("DOWNLOAD", Color::Cyan, true)
-        // ));
         let dl_history = monitor.get_history_dl();
-        // if !dl_history.is_empty() {
-        //     match plot_with_config(&dl_history, config.clone()) {
-        //         Ok(chart) => output.push_str(&format!("{}\n", chart)),
-        //         Err(e) => output.push_str(&format!("Chart error: {}\n", e)),
-        //     }
-        // }
 
         if !dl_history.is_empty() {
-            let color_code = color_to_256(Color::Cyan); // bebas mau warna apa
+            let color_code = color_to_256(Color::Cyan);
 
             match plot_with_config(&dl_history, config.clone()) {
                 Ok(chart) => {
@@ -399,25 +411,14 @@ fn render_ui(
         if show_both {
             output.push('\n');
         }
-        // output.push_str(&format!(
-        //     "{}\n",
-        //     style_text("UPLOAD", Color::Yellow, true)
-        // ));
         let ul_history = monitor.get_history_ul();
-        // if !ul_history.is_empty() {
-        //     match plot_with_config(&ul_history, config) {
-        //         Ok(chart) => output.push_str(&format!("{}\n", chart)),
-        //         Err(e) => output.push_str(&format!("Chart error: {}\n", e)),
-        //     }
-        // }
         if !ul_history.is_empty() {
-            let color_code = color_to_256(Color::Yellow); // bebas mau warna apa
+            let color_code = color_to_256(Color::Yellow);
 
             match plot_with_config(&ul_history, config.clone()) {
                 Ok(chart) => {
                     let colored = format!("\x1b[38;5;{}m{}\x1b[0m", color_code, chart);
                     output.push_str(&colored);
-                    // output.push('\n');
                 }
                 Err(e) => {
                     output.push_str(&format!("Chart error: {}\n", e));
@@ -425,11 +426,6 @@ fn render_ui(
             }
         }
     }
-
-    // output.push_str(&format!(
-    //     "\n{}\n",
-    //     style_text("Press 'q' or Ctrl+C to quit", Color::DarkGrey, false)
-    // ));
 
     Ok(output)
 }
@@ -465,7 +461,6 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
                     match key_event.code {
                         KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
                         KeyCode::Char('c') => {
-                            // Check for Ctrl+C
                             use crossterm::event::KeyModifiers;
                             if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                                 break;
@@ -476,22 +471,7 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
                 }
             }
 
-            // Update bandwidth stats
-            // if last_update.elapsed() >= INTERVAL {
-            //     let stats = monitor.update()?;
-            //     let (term_width, _) = size()?;
-            //     let ui = render_ui(&monitor, &stats, &args, term_width)?;
-
-            //     execute!(
-            //         stdout,
-            //         MoveTo(0, 0),
-            //         Clear(ClearType::All),
-            //         Print(&ui)
-            //     )?;
-            //     stdout.flush()?;
-
-            //     last_update = Instant::now();
-            // }
+            // FIX: Update bandwidth stats dengan timing yang akurat
             if last_update.elapsed() >= INTERVAL {
                 let stats = monitor.update()?;
                 let (term_width, term_height) = size()?;

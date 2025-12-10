@@ -41,24 +41,29 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: bandwidthmon
-            asset_name: bandwidthmon-linux-amd64
+            binary1_name: bandwidthmon
+            binary2_name: bandwidthmon2
+            asset_prefix: linux-amd64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact_name: bandwidthmon
-            asset_name: bandwidthmon-linux-musl-amd64
+            binary1_name: bandwidthmon
+            binary2_name: bandwidthmon2
+            asset_prefix: linux-musl-amd64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: bandwidthmon.exe
-            asset_name: bandwidthmon-windows-amd64.exe
+            binary1_name: bandwidthmon.exe
+            binary2_name: bandwidthmon2.exe
+            asset_prefix: windows-amd64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: bandwidthmon
-            asset_name: bandwidthmon-macos-amd64
+            binary1_name: bandwidthmon
+            binary2_name: bandwidthmon2
+            asset_prefix: macos-amd64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: bandwidthmon
-            asset_name: bandwidthmon-macos-arm64
+            binary1_name: bandwidthmon
+            binary2_name: bandwidthmon2
+            asset_prefix: macos-arm64
 
     steps:
     - uses: actions/checkout@v4
@@ -75,29 +80,35 @@ jobs:
     - name: Build release
       run: cargo build --release --target ${{ matrix.target }}
 
-    - name: Strip binary (Linux/macOS)
+    - name: Strip binaries (Linux/macOS)
       if: matrix.os != 'windows-latest'
-      run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+      run: |
+        strip target/${{ matrix.target }}/release/${{ matrix.binary1_name }}
+        strip target/${{ matrix.target }}/release/${{ matrix.binary2_name }}
 
     - name: Create tarball (Linux/macOS)
       if: matrix.os != 'windows-latest'
       run: |
         cd target/${{ matrix.target }}/release
-        tar czf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+        tar czf ../../../bandwidthmon-${{ matrix.asset_prefix }}.tar.gz ${{ matrix.binary1_name }}
+        tar czf ../../../bandwidthmon2-${{ matrix.asset_prefix }}.tar.gz ${{ matrix.binary2_name }}
 
     - name: Create zip (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
         cd target/${{ matrix.target }}/release
-        Compress-Archive -Path ${{ matrix.artifact_name }} -DestinationPath ../../../${{ matrix.asset_name }}.zip
+        Compress-Archive -Path ${{ matrix.binary1_name }} -DestinationPath ../../../bandwidthmon-${{ matrix.asset_prefix }}.zip
+        Compress-Archive -Path ${{ matrix.binary2_name }} -DestinationPath ../../../bandwidthmon2-${{ matrix.asset_prefix }}.zip
 
-    - name: Upload Release Asset
+    - name: Upload Release Assets
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          ${{ matrix.asset_name }}.tar.gz
-          ${{ matrix.asset_name }}.zip
+          bandwidthmon-${{ matrix.asset_prefix }}.tar.gz
+          bandwidthmon-${{ matrix.asset_prefix }}.zip
+          bandwidthmon2-${{ matrix.asset_prefix }}.tar.gz
+          bandwidthmon2-${{ matrix.asset_prefix }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
