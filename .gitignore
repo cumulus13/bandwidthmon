@@ -1,0 +1,48 @@
+# PT backup directory
+.pt/
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test coverage
+*.profraw
+*.profdata
+
+# Documentation
+/doc/
+# Added entries (1 items)
+test/
+
+# Added entries (1 items)
+CHANGELOG.md
+
+# Added entries (13 items)
+build.bat
+build.sh
+DEPLOYMENT_GUIDE.md
+FIXED_APPLIED.md
+FLICKER_FIX.md
+PROJECT_STRUCTURE.md
+PUBLISH.md
+SMOOTH_RENDERING.md
+bandwidthmon.exe
+bandwidthmon.sublime-project
+bandwidthmon.sublime-workspace
+bandwidthmon2.exe
+*sublime*
