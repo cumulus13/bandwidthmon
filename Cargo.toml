@@ -1,13 +1,14 @@
 bin = [
     { name = "bandwidthmon", path = "src/bandwidthmon.rs" },
     { name = "bandwidthmon2", path = "src/bandwidthmon2.rs" },
+    { name = "bandwidthmon3", path = "src/bandwidthmon3.rs" },
 ]
 
 [package]
 name = "bandwidthmon"
-version = "0.1.10"
-edition = "2021"
-rust-version = "1.70"
+version = "0.1.11"
+edition = "2024"
+rust-version = "1.86"
 authors = [
     "Hadi Cahyadi <cumulus13@gmail.com>",
 ]
@@ -47,11 +48,14 @@ exclude = [
 ]
 
 [dependencies]
-sysinfo = "0.32"
 crossterm = "0.28"
+colored = "3.0.0"
+term_size = "0.3.2"
+sysinfo = "0.36"
 rasciichart = "0.2.16"
 anyhow = "1.0"
 ctrlc = "3.4"
+regex = "1"
 
 [dependencies.clap]
 version = "4.5"
@@ -85,7 +89,7 @@ libc = "0.2"
 [target."cfg(target_os = \"windows\")".dependencies]
 
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.59"
+version = "0.61.2"
 features = [
     "Win32_Foundation",
     "Win32_System_Console",

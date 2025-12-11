@@ -7,13 +7,16 @@
 Real-time network bandwidth monitor with beautiful ASCII charts for the terminal.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/cumulus13/bandwidthmon/master/bandwidthmon1.png" alt="Bandwidthmon Line">
+  <img src="https://raw.githubusercontent.com/cumulus13/bandwidthmon/master/bandwidthmon_1.png" alt="Bandwidthmon Line">
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/cumulus13/bandwidthmon/master/bandwidthmon2.png" alt="Bandwidthmon Graph">
+  <img src="https://raw.githubusercontent.com/cumulus13/bandwidthmon/master/bandwidthmon_2.png" alt="Bandwidthmon Graph">
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/cumulus13/bandwidthmon/master/bandwidthmon_3.png" alt="Bandwidthmon rasciichart">
+</p>
 
 ## Features
 
@@ -79,6 +82,14 @@ Same arguments as `bandwidthmon`, but uses manual graph rendering:
 bandwidthmon2 -i wlan0 -H 20 -s
 ```
 
+### bandwidthmon3 (other version rasciichart)
+
+Same arguments as `bandwidthmon`, but uses manual less color:
+
+```bash
+bandwidthmon3 -i wlan0 -H 20 -s
+```
+
 ## Command-line Options
 
 ```
@@ -100,28 +111,6 @@ Options:
 - `q` or `Q` - Quit
 - `Esc` - Quit
 - `Ctrl+C` - Quit
-
-## Screenshots
-
-```
-═══ Bandwidth Monitor (eth0) ═══
-Download: 1.24 MB/s  │  Upload: 456.78 KB/s  Press 'q' or Ctrl+C to quit
-
-   1.50 │
-   1.25 │      ╭─╮
-   1.00 │    ╭─╯ ╰─╮
-   0.75 │  ╭─╯     ╰─╮
-   0.50 │╭─╯         ╰─╮
-   0.25 ╰╯             ╰─
-
- 500.00 │
- 400.00 │    ╭──╮
- 300.00 │  ╭─╯  ╰─╮
- 200.00 │╭─╯      ╰─╮
- 100.00 ╰╯          ╰─
-
-Press 'q' or Ctrl+C to quit
-```
 
 ## Summary Statistics
 

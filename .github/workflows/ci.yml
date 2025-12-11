@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ master, develop ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -87,16 +87,19 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
+            binary3_name: bandwidthmon3
             asset_prefix: linux-amd64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary1_name: bandwidthmon.exe
             binary2_name: bandwidthmon2.exe
+            binary3_name: bandwidthmon3.exe
             asset_prefix: windows-amd64
           - os: macos-latest
             target: x86_64-apple-darwin
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
+            binary3_name: bandwidthmon3
             asset_prefix: macos-amd64
     steps:
     - uses: actions/checkout@v4
@@ -114,6 +117,7 @@ jobs:
       run: |
         strip target/${{ matrix.target }}/release/${{ matrix.binary1_name }}
         strip target/${{ matrix.target }}/release/${{ matrix.binary2_name }}
+        strip target/${{ matrix.target }}/release/${{ matrix.binary3_name }}
 
     - name: Upload bandwidthmon
       uses: actions/upload-artifact@v4
@@ -126,3 +130,9 @@ jobs:
       with:
         name: bandwidthmon2-${{ matrix.asset_prefix }}
         path: target/${{ matrix.target }}/release/${{ matrix.binary2_name }}
+
+    - name: Upload bandwidthmon3
+      uses: actions/upload-artifact@v4
+      with:
+        name: bandwidthmon3-${{ matrix.asset_prefix }}
+        path: target/${{ matrix.target }}/release/${{ matrix.binary3_name }}

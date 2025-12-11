@@ -1,4 +1,4 @@
-#!/usr/bin/env rust
+// File: src/bandwidthmon2.rs
 //! Bandwidth Monitor 2 - Manual graph rendering
 //! Author: Hadi Cahyadi <cumulus13@gmail.com>
 //! License: MIT
@@ -125,7 +125,7 @@ impl NetworkMonitor {
     }
 
     fn update(&mut self) -> Result<BandwidthStats> {
-        self.networks.refresh();
+        self.networks.refresh(false);
 
         let data = self
             .networks
@@ -349,7 +349,7 @@ fn render_chart(data: &[f64], height: usize, width: usize, color: Color) -> Stri
     let mut canvas: Vec<Vec<char>> = vec![vec![' '; width]; height];
 
     // Scale and plot data points with sub-character resolution
-    let scale = (height as f64) / range;
+    // let scale = (height as f64) / range;
 
     for (x, &value) in plot_data.iter().enumerate() {
         if !value.is_finite() {

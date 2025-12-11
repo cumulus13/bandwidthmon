@@ -1,9 +1,8 @@
-#!/usr/bin/env rust
-//! Bandwidth Monitor - Using rasciichart library
+// File: src/bandwidthmon.rs
+//! Bandwidth Monitor - Using custom rasciichart with auto-resize
 //! Author: Hadi Cahyadi <cumulus13@gmail.com>
 //! License: MIT
 
-use crossterm::queue;
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
@@ -16,25 +15,24 @@ use crossterm::{
         LeaveAlternateScreen,
     },
 };
-use rasciichart::{plot_with_config, Config as ChartConfig};
+use rasciichart::{plot_with_config, Config};
 use std::collections::VecDeque;
 use std::io::{stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::Networks;
 
-// const INTERVAL: Duration = Duration::from_secs(1);
-const INTERVAL: Duration = Duration::from_millis(500);
+const INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_HISTORY: usize = 120;
 const DEFAULT_HEIGHT: usize = 10;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "bandwidthmon",
+    name = "bandwidthmon2",
     version,
     author = "Hadi Cahyadi <cumulus13@gmail.com>",
-    about = "Real-time network bandwidth monitor with ASCII charts by Hadi Cahyadi <cumulus13@gmail.com>"
+    about = "Real-time network bandwidth monitor with rasciichart"
 )]
 struct Args {
     /// Network interface to monitor (auto-select if not specified)
@@ -85,7 +83,7 @@ struct NetworkMonitor {
     history_ul: VecDeque<f64>,
     prev_rx: u64,
     prev_tx: u64,
-    prev_time: Instant,  // FIX: Track waktu untuk perhitungan akurat
+    prev_time: Instant,
     start_time: Instant,
     peak_dl: f64,
     peak_ul: f64,
@@ -108,7 +106,7 @@ impl NetworkMonitor {
             .unwrap_or((0, 0));
 
         let now = Instant::now();
-        
+
         Ok(Self {
             interface,
             networks,
@@ -116,7 +114,7 @@ impl NetworkMonitor {
             history_ul: VecDeque::with_capacity(history_size),
             prev_rx,
             prev_tx,
-            prev_time: now,  // FIX: Inisialisasi prev_time
+            prev_time: now,
             start_time: now,
             peak_dl: 0.0,
             peak_ul: 0.0,
@@ -127,7 +125,7 @@ impl NetworkMonitor {
     }
 
     fn update(&mut self) -> Result<BandwidthStats> {
-        self.networks.refresh();
+        self.networks.refresh(false);
 
         let data = self
             .networks
@@ -138,10 +136,8 @@ impl NetworkMonitor {
         let cur_tx = data.total_transmitted();
         let cur_time = Instant::now();
 
-        // FIX: Hitung waktu elapsed yang sebenarnya
         let elapsed = cur_time.duration_since(self.prev_time).as_secs_f64();
         
-        // FIX: Hindari division by zero
         if elapsed < 0.001 {
             return Ok(BandwidthStats {
                 download_bps: 0.0,
@@ -154,15 +150,14 @@ impl NetworkMonitor {
         let dl_bytes = cur_rx.saturating_sub(self.prev_rx);
         let ul_bytes = cur_tx.saturating_sub(self.prev_tx);
 
-        // FIX: Konversi ke bytes per second yang AKURAT
         let dl_bps = (dl_bytes as f64) / elapsed;
         let ul_bps = (ul_bytes as f64) / elapsed;
 
         self.prev_rx = cur_rx;
         self.prev_tx = cur_tx;
-        self.prev_time = cur_time;  // FIX: Update prev_time
+        self.prev_time = cur_time;
 
-        // FIX: Update history dengan mekanisme yang benar
+        // Update history
         if self.history_dl.len() >= self.history_dl.capacity() {
             self.history_dl.pop_front();
         }
@@ -315,6 +310,55 @@ fn color_to_256(color: Color) -> u8 {
     }
 }
 
+/// Render chart using custom rasciichart library
+fn render_chart_rasciichart(
+    data: &[f64],
+    height: usize,
+    width: usize,
+    color: Color,
+    label: &str,
+) -> String {
+    if data.is_empty() || height == 0 || width == 0 {
+        return String::new();
+    }
+
+    // Get the last `width` points for plotting
+    let start_idx = data.len().saturating_sub(width);
+    let plot_data: Vec<f64> = data[start_idx..].to_vec();
+
+    if plot_data.is_empty() {
+        return String::new();
+    }
+
+    // Configure rasciichart with proper width and height
+    let config = Config::default()
+        .with_height(height)
+        .with_width(width)
+        .with_labels(true)
+        .with_label_format("{:.1}".to_string());
+
+    // Generate the chart
+    let chart = match plot_with_config(&plot_data, config) {
+        Ok(c) => c,
+        Err(e) => return format!("Chart error: {}", e),
+    };
+
+    // Add color to the chart
+    let color_code = color_to_256(color);
+    let colored_chart: String = chart
+        .lines()
+        .map(|line| format!("\x1b[38;5;{}m{}\x1b[0m", color_code, line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Add label
+    format!(
+        "{}\n{}",
+        style_text(label, color, true),
+        colored_chart
+    )
+}
+
 fn render_ui(
     monitor: &NetworkMonitor,
     stats: &BandwidthStats,
@@ -322,11 +366,14 @@ fn render_ui(
     term_width: u16,
 ) -> Result<String> {
     let mut output = String::new();
-    let min_chart_width = 10;
+    
+    // Calculate chart width based on terminal width
+    // Account for label width (approximately 10 chars) and margins
     let chart_width = if args.width > 0 {
-        args.width.clamp(min_chart_width, term_width.saturating_sub(10).max(20) as usize)
+        args.width
     } else {
-        term_width.saturating_sub(15).max(20) as usize
+        // Auto-resize: terminal width minus labels and margins
+        term_width.saturating_sub(20).max(30) as usize
     };
 
     // Header
@@ -380,50 +427,36 @@ fn render_ui(
 
     output.push('\n');
 
-    // Charts
-    let config = ChartConfig::default()
-        .with_height(args.height)
-        .with_width(chart_width)
-        .with_labels(true);
-
+    // Charts using rasciichart
     let show_both = !args.download && !args.upload;
 
     if args.download || show_both {
         let dl_history = monitor.get_history_dl();
-
         if !dl_history.is_empty() {
-            let color_code = color_to_256(Color::Cyan);
-
-            match plot_with_config(&dl_history, config.clone()) {
-                Ok(chart) => {
-                    let colored = format!("\x1b[38;5;{}m{}\x1b[0m", color_code, chart);
-                    output.push_str(&colored);
-                    if show_both {output.push('\n');}
-                }
-                Err(e) => {
-                    output.push_str(&format!("Chart error: {}\n", e));
-                }
-            }
+            let chart = render_chart_rasciichart(
+                &dl_history,
+                args.height,
+                chart_width,
+                Color::Cyan,
+                "▼ Download Speed",
+            );
+            output.push_str(&chart);
+            output.push_str("\n\n");
         }
     }
 
     if (args.upload || show_both) && !args.download {
-        if show_both {
-            output.push('\n');
-        }
         let ul_history = monitor.get_history_ul();
         if !ul_history.is_empty() {
-            let color_code = color_to_256(Color::Yellow);
-
-            match plot_with_config(&ul_history, config.clone()) {
-                Ok(chart) => {
-                    let colored = format!("\x1b[38;5;{}m{}\x1b[0m", color_code, chart);
-                    output.push_str(&colored);
-                }
-                Err(e) => {
-                    output.push_str(&format!("Chart error: {}\n", e));
-                }
-            }
+            let chart = render_chart_rasciichart(
+                &ul_history,
+                args.height,
+                chart_width,
+                Color::Yellow,
+                "▲ Upload Speed",
+            );
+            output.push_str(&chart);
+            output.push('\n');
         }
     }
 
@@ -439,7 +472,7 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
 
     println!("Monitoring interface: {}\n", style_text(&interface, Color::Cyan, true));
 
-    let mut monitor = NetworkMonitor::new(interface, args.history)?;
+    let monitor = Arc::new(Mutex::new(NetworkMonitor::new(interface, args.history)?));
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
@@ -471,20 +504,32 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
                 }
             }
 
-            // FIX: Update bandwidth stats dengan timing yang akurat
+            // Update bandwidth stats with accurate timing
             if last_update.elapsed() >= INTERVAL {
-                let stats = monitor.update()?;
+                // Lock monitor untuk update - mencegah race condition
+                let stats = {
+                    let mut mon = monitor.lock().unwrap();
+                    mon.update()?
+                };
+
+                // Get terminal size - ini bisa berubah karena resize
                 let (term_width, term_height) = size()?;
 
-                let ui = render_ui(&monitor, &stats, &args, term_width)?;
+                // Render UI dengan data terbaru
+                let ui = {
+                    let mon = monitor.lock().unwrap();
+                    render_ui(&mon, &stats, &args, term_width)?
+                };
+
                 let mut lines: Vec<String> = ui.lines().map(str::to_owned).collect();
 
-                // Pastikan tepat term_height baris
+                // Resize output to fit terminal height
                 lines.resize_with(term_height as usize, String::new);
 
                 let full_output = lines.join("\n");
 
-                queue!(
+                // Write to screen
+                execute!(
                     stdout,
                     MoveTo(0, 0),
                     Print(full_output)
