@@ -6,7 +6,7 @@ bin = [
 
 [package]
 name = "bandwidthmon"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 rust-version = "1.86"
 authors = [
@@ -54,7 +54,7 @@ term_size = "0.3.2"
 sysinfo = "0.36"
 rasciichart = "0.2.16"
 anyhow = "1.0"
-ctrlc = "3.4"
+ctrlc = "3.5"
 regex = "1"
 
 [dependencies.clap]
@@ -81,12 +81,6 @@ opt-level = 0
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"
-
-[target."cfg(target_os = \"linux\")".dependencies]
-
-[target."cfg(target_os = \"macos\")".dependencies]
-
-[target."cfg(target_os = \"windows\")".dependencies]
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.61.2"
