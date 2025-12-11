@@ -6,7 +6,7 @@ bin = [
 
 [package]
 name = "bandwidthmon"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 rust-version = "1.86"
 authors = [
@@ -45,6 +45,8 @@ exclude = [
     "bandwidthmon2.exe",
     "bandwidthmon.sublime-project",
     "bandwidthmon.sublime-workspace",
+    "test/*",
+    "bandwidthmon3.exe",
 ]
 
 [dependencies]

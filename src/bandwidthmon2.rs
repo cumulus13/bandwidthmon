@@ -6,6 +6,7 @@
 use crossterm::queue;
 use anyhow::{Context, Result};
 use clap::Parser;
+use clap::ArgAction;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, Event, KeyCode},
@@ -22,17 +23,37 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::Networks;
+use std::fmt;
 
 const INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_HISTORY: usize = 120;
 const DEFAULT_HEIGHT: usize = 10;
 
+struct ColoredVersion;
+
+impl ColoredVersion {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl fmt::Display for ColoredVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = style_text("bandwidthmon2", Color::Yellow, true);
+        let author = style_text("Hadi Cahyadi <cumulus13@gmail.com>", Color::Cyan, true);
+        let version = style_text(env!("CARGO_PKG_VERSION"), Color::White, true);
+
+        write!(f, "{} {} by {}", name, version, author)
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
-    name = "bandwidthmon2",
-    version,
-    author = "Hadi Cahyadi <cumulus13@gmail.com>",
-    about = "Real-time network bandwidth monitor with manual graph rendering"
+    // name = "bandwidthmon2 by Hadi Cahyadi <cumulus13@gmail.com>",
+    // version,
+    // author = "Hadi Cahyadi <cumulus13@gmail.com>",
+    about = "Real-time network bandwidth monitor with manual graph rendering",
+    disable_version_flag = true
 )]
 struct Args {
     /// Network interface to monitor (auto-select if not specified)
@@ -66,6 +87,9 @@ struct Args {
     /// Maximum history points
     #[arg(long, default_value_t = DEFAULT_HISTORY)]
     history: usize,
+
+    #[arg(short = 'v', short = 'V', long = "version", action = ArgAction::SetTrue)]
+    version: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -596,6 +620,11 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.version {
+        println!("{}", ColoredVersion::new());
+        return Ok(());
+    }
 
     if args.list {
         list_interfaces()?;
