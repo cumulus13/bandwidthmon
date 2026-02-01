@@ -44,31 +44,31 @@ jobs:
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
             binary3_name: bandwidthmon3
-            asset_prefix: linux-amd64
+            asset_suffix: linux-amd64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
             binary3_name: bandwidthmon3
-            asset_prefix: linux-musl-amd64
+            asset_suffix: linux-musl-amd64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary1_name: bandwidthmon.exe
             binary2_name: bandwidthmon2.exe
             binary3_name: bandwidthmon3.exe
-            asset_prefix: windows-amd64
+            asset_suffix: windows-amd64
           - os: macos-latest
             target: x86_64-apple-darwin
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
             binary3_name: bandwidthmon3
-            asset_prefix: macos-amd64
+            asset_suffix: macos-amd64
           - os: macos-latest
             target: aarch64-apple-darwin
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
             binary3_name: bandwidthmon3
-            asset_prefix: macos-arm64
+            asset_suffix: macos-arm64
 
     steps:
     - uses: actions/checkout@v4
@@ -88,37 +88,61 @@ jobs:
     - name: Strip binaries (Linux/macOS)
       if: matrix.os != 'windows-latest'
       run: |
-        strip target/${{ matrix.target }}/release/${{ matrix.binary1_name }}
-        strip target/${{ matrix.target }}/release/${{ matrix.binary2_name }}
-        strip target/${{ matrix.target }}/release/${{ matrix.binary3_name }}
+        strip target/${{ matrix.target }}/release/${{ matrix.binary1_name || true}}
+        strip target/${{ matrix.target }}/release/${{ matrix.binary2_name || true}}
+        strip target/${{ matrix.target }}/release/${{ matrix.binary3_name || true}}
 
     - name: Create tarball (Linux/macOS)
       if: matrix.os != 'windows-latest'
       run: |
         cd target/${{ matrix.target }}/release
-        tar czf ../../../bandwidthmon-${{ matrix.asset_prefix }}.tar.gz ${{ matrix.binary1_name }}
-        tar czf ../../../bandwidthmon2-${{ matrix.asset_prefix }}.tar.gz ${{ matrix.binary2_name }}
-        tar czf ../../../bandwidthmon3-${{ matrix.asset_prefix }}.tar.gz ${{ matrix.binary3_name }}
+        tar czf ../../../bandwidthmon-${{ matrix.asset_suffix }}.tar.gz ${{ matrix.binary1_name }} README.md LICENSE || tar czf ../../../bandwidthmon-${{ matrix.asset_suffix }}.tar.gz ${{ matrix.binary1_name }}
+        tar czf ../../../bandwidthmon2-${{ matrix.asset_suffix }}.tar.gz ${{ matrix.binary2_name }} README.md LICENSE || tar czf ../../../bandwidthmon2-${{ matrix.asset_suffix }}.tar.gz ${{ matrix.binary2_name }}
+        tar czf ../../../bandwidthmon3-${{ matrix.asset_suffix }}.tar.gz ${{ matrix.binary3_name }} README.md LICENSE || tar czf ../../../bandwidthmon3-${{ matrix.asset_suffix }}.tar.gz ${{ matrix.binary3_name }}
 
     - name: Create zip (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
         cd target/${{ matrix.target }}/release
-        Compress-Archive -Path ${{ matrix.binary1_name }} -DestinationPath ../../../bandwidthmon-${{ matrix.asset_prefix }}.zip
-        Compress-Archive -Path ${{ matrix.binary2_name }} -DestinationPath ../../../bandwidthmon2-${{ matrix.asset_prefix }}.zip
-        Compress-Archive -Path ${{ matrix.binary3_name }} -DestinationPath ../../../bandwidthmon3-${{ matrix.asset_prefix }}.zip
+        
+        if (Test-Path ../../../README.md) {
+          Compress-Archive -Path ${{ matrix.binary1_name }}, ../../../README.md, ../../../LICENSE -DestinationPath ../../../bandwidthmon-${{ matrix.asset_suffix }}.zip -ErrorAction SilentlyContinue
+          if (-not $?) {
+            Compress-Archive -Path ${{ matrix.binary1_name }} -DestinationPath ../../../bandwidthmon-${{ matrix.asset_suffix }}.zip
+          }
+        } else {
+          Compress-Archive -Path ${{ matrix.binary1_name }} -DestinationPath ../../../bandwidthmon-${{ matrix.asset_suffix }}.zip
+        }
+
+        if (Test-Path ../../../README.md) {
+          Compress-Archive -Path ${{ matrix.binary2_name }}, ../../../README.md, ../../../LICENSE -DestinationPath ../../../bandwidthmon2-${{ matrix.asset_suffix }}.zip -ErrorAction SilentlyContinue
+          if (-not $?) {
+            Compress-Archive -Path ${{ matrix.binary2_name }} -DestinationPath ../../../bandwidthmon2-${{ matrix.asset_suffix }}.zip
+          }
+        } else {
+          Compress-Archive -Path ${{ matrix.binary2_name }} -DestinationPath ../../../bandwidthmon2-${{ matrix.asset_suffix }}.zip
+        }
+
+        if (Test-Path ../../../README.md) {
+          Compress-Archive -Path ${{ matrix.binary3_name }}, ../../../README.md, ../../../LICENSE -DestinationPath ../../../bandwidthmon3-${{ matrix.asset_suffix }}.zip -ErrorAction SilentlyContinue
+          if (-not $?) {
+            Compress-Archive -Path ${{ matrix.binary3_name }} -DestinationPath ../../../bandwidthmon3-${{ matrix.asset_suffix }}.zip
+          }
+        } else {
+          Compress-Archive -Path ${{ matrix.binary3_name }} -DestinationPath ../../../bandwidthmon3-${{ matrix.asset_suffix }}.zip
+        }
 
     - name: Upload Release Assets
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          bandwidthmon-${{ matrix.asset_prefix }}.tar.gz
-          bandwidthmon-${{ matrix.asset_prefix }}.zip
-          bandwidthmon2-${{ matrix.asset_prefix }}.tar.gz
-          bandwidthmon2-${{ matrix.asset_prefix }}.zip
-          bandwidthmon3-${{ matrix.asset_prefix }}.tar.gz
-          bandwidthmon3-${{ matrix.asset_prefix }}.zip
+          bandwidthmon-${{ matrix.asset_suffix }}.tar.gz
+          bandwidthmon-${{ matrix.asset_suffix }}.zip
+          bandwidthmon2-${{ matrix.asset_suffix }}.tar.gz
+          bandwidthmon2-${{ matrix.asset_suffix }}.zip
+          bandwidthmon3-${{ matrix.asset_suffix }}.tar.gz
+          bandwidthmon3-${{ matrix.asset_suffix }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

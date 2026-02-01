@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -88,19 +88,19 @@ jobs:
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
             binary3_name: bandwidthmon3
-            asset_prefix: linux-amd64
+            asset_suffix: linux-amd64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary1_name: bandwidthmon.exe
             binary2_name: bandwidthmon2.exe
             binary3_name: bandwidthmon3.exe
-            asset_prefix: windows-amd64
+            asset_suffix: windows-amd64
           - os: macos-latest
             target: x86_64-apple-darwin
             binary1_name: bandwidthmon
             binary2_name: bandwidthmon2
             binary3_name: bandwidthmon3
-            asset_prefix: macos-amd64
+            asset_suffix: macos-amd64
     steps:
     - uses: actions/checkout@v4
     
@@ -122,17 +122,20 @@ jobs:
     - name: Upload bandwidthmon
       uses: actions/upload-artifact@v4
       with:
-        name: bandwidthmon-${{ matrix.asset_prefix }}
+        name: bandwidthmon-${{ matrix.asset_suffix }}
         path: target/${{ matrix.target }}/release/${{ matrix.binary1_name }}
+        if-no-files-found: error
 
     - name: Upload bandwidthmon2
       uses: actions/upload-artifact@v4
       with:
-        name: bandwidthmon2-${{ matrix.asset_prefix }}
+        name: bandwidthmon2-${{ matrix.asset_suffix }}
         path: target/${{ matrix.target }}/release/${{ matrix.binary2_name }}
+        if-no-files-found: error
 
     - name: Upload bandwidthmon3
       uses: actions/upload-artifact@v4
       with:
-        name: bandwidthmon3-${{ matrix.asset_prefix }}
+        name: bandwidthmon3-${{ matrix.asset_suffix }}
         path: target/${{ matrix.target }}/release/${{ matrix.binary3_name }}
+        if-no-files-found: error
