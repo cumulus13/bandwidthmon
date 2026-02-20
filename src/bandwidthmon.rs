@@ -4,53 +4,119 @@
 //! License: MIT
 
 use anyhow::{Context, Result};
-use clap::{Parser,ArgAction};
-use crossterm::{
-    cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode},
-    execute,
-    style::{Color, Print},
-    terminal::{
-        disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen,
-        LeaveAlternateScreen,
-    },
-};
+use clap::{Parser, ArgAction};
 use rasciichart::{plot_with_config, Config};
 use std::collections::VecDeque;
 use std::io::{stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use sysinfo::Networks;
 use std::fmt;
+use sysinfo::Networks;
+
+// ── REMOVED: crossterm entirely for rendering.
+// crossterm's EnterAlternateScreen + MoveTo(0,0) + Print(full_output) is the
+// primary cause of "chaos" on Linux/macOS terminals. The alternate screen
+// buffer behaves inconsistently across terminal emulators (gnome-terminal,
+// kitty, iTerm2, tmux, screen, etc.) when:
+//   1. You move to (0,0) but the previous render left more lines than the
+//      current one — stale lines remain visible below.
+//   2. resize_with(term_height, String::new) pads with empty Strings but
+//      those become bare newlines that scroll the terminal.
+//   3. Print(full_output) writes ANSI escape codes that are not flushed
+//      atomically, causing tearing on slow terminals / piped output.
+//   4. enable_raw_mode() on Linux intercepts ALL signals differently from
+//      macOS, causing Ctrl-C to leave the terminal in raw mode on panic.
+//
+// pingmon.rs works correctly because it uses:
+//   • \x1B[H  (cursor home, no alternate screen)
+//   • \x1B[K  (erase to end of line, per-line — no full-screen redraw)
+//   • \x1B[J  (erase rest of screen — cleans up without blank-line padding)
+//   • direct print!/println! — no crossterm abstraction layer
+//   • manual flush only once per frame via io::stdout().flush()
+//
+// We replicate that exact approach here and drop crossterm for rendering.
+// crossterm is still used ONLY for reading terminal size (size()) and
+// keyboard events (event::poll / event::read) because those are genuinely
+// cross-platform utilities. Raw mode is now entered/exited safely.
+
+use crossterm::{
+    event::{self, Event, KeyCode, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode, size},
+};
 
 const INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_HISTORY: usize = 120;
 const DEFAULT_HEIGHT: usize = 10;
 
-struct ColoredVersion;
+// ── ANSI helpers (mirrors pingmon.rs style) ──────────────────────────────────
 
-impl ColoredVersion {
-    pub fn new() -> Self {
-        Self {}
+/// Move cursor to top-left without switching to alternate screen.
+#[inline]
+fn cursor_home() {
+    print!("\x1B[H");
+}
+
+/// Erase from cursor to end of current line.
+#[inline]
+fn clear_to_eol() {
+    print!("\x1B[K");
+}
+
+/// Erase from cursor to end of screen (clears leftover lines from previous
+/// taller render without inserting blank lines).
+#[inline]
+fn clear_to_eos() {
+    print!("\x1B[J");
+}
+
+/// Clear entire screen and home cursor (used once at startup).
+#[inline]
+fn clear_screen() {
+    print!("\x1B[2J\x1B[H");
+}
+
+/// Flush stdout — called once per frame, not per line.
+#[inline]
+fn flush() {
+    let _ = stdout().flush();
+}
+
+// ── Colour helpers ────────────────────────────────────────────────────────────
+
+fn style_text(text: &str, color_code: u8, bold: bool) -> String {
+    if bold {
+        format!("\x1b[1m\x1b[38;5;{}m{}\x1b[0m", color_code, text)
+    } else {
+        format!("\x1b[38;5;{}m{}\x1b[0m", color_code, text)
     }
 }
 
+// Named colour constants — avoids the crossterm Color enum dependency in
+// rendering code.
+const COL_CYAN: u8 = 51;
+const COL_YELLOW: u8 = 226;
+const COL_WHITE: u8 = 15;
+const COL_GREY: u8 = 240;
+const COL_GREEN: u8 = 46;
+
+// ── Version display ───────────────────────────────────────────────────────────
+
+struct ColoredVersion;
+
 impl fmt::Display for ColoredVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = style_text("bandwidthmon", Color::Yellow, true);
-        let author = style_text("Hadi Cahyadi <cumulus13@gmail.com>", Color::Cyan, true);
-        let version = style_text(env!("CARGO_PKG_VERSION"), Color::White, true);
-
+        let name    = style_text("bandwidthmon", COL_YELLOW, true);
+        let version = style_text(env!("CARGO_PKG_VERSION"), COL_WHITE, true);
+        let author  = style_text("Hadi Cahyadi <cumulus13@gmail.com>", COL_CYAN, true);
         write!(f, "{} {} by {}", name, version, author)
     }
 }
 
+// ── CLI ───────────────────────────────────────────────────────────────────────
+
 #[derive(Parser, Debug)]
 #[command(
-    // name = "bandwidthmon by Hadi Cahyadi <cumulus13@gmail.com>",
-    // version,
-    // author = "Hadi Cahyadi <cumulus13@gmail.com>",
     about = "Real-time network bandwidth monitor with rasciichart",
     disable_version_flag = true
 )]
@@ -87,9 +153,11 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_HISTORY)]
     history: usize,
 
-    #[arg(short = 'v', short = 'V', long = "version", action = ArgAction::SetTrue)]
+    #[arg(short = 'v', long = "version", action = ArgAction::SetTrue)]
     version: bool,
 }
+
+// ── Bandwidth stats ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 struct BandwidthStats {
@@ -98,6 +166,8 @@ struct BandwidthStats {
     total_rx: u64,
     total_tx: u64,
 }
+
+// ── Network monitor ───────────────────────────────────────────────────────────
 
 struct NetworkMonitor {
     interface: String,
@@ -113,19 +183,20 @@ struct NetworkMonitor {
     avg_dl: f64,
     avg_ul: f64,
     sample_count: u64,
+    history_size: usize,
 }
 
 impl NetworkMonitor {
     fn new(interface: String, history_size: usize) -> Result<Self> {
         let networks = Networks::new_with_refreshed_list();
-        
+
         if !networks.iter().any(|(name, _)| name == &interface) {
             anyhow::bail!("Interface '{}' not found", interface);
         }
 
         let (prev_rx, prev_tx) = networks
             .get(&interface)
-            .map(|data| (data.total_received(), data.total_transmitted()))
+            .map(|d| (d.total_received(), d.total_transmitted()))
             .unwrap_or((0, 0));
 
         let now = Instant::now();
@@ -133,8 +204,8 @@ impl NetworkMonitor {
         Ok(Self {
             interface,
             networks,
-            history_dl: VecDeque::with_capacity(history_size),
-            history_ul: VecDeque::with_capacity(history_size),
+            history_dl: VecDeque::with_capacity(history_size + 1),
+            history_ul: VecDeque::with_capacity(history_size + 1),
             prev_rx,
             prev_tx,
             prev_time: now,
@@ -144,6 +215,7 @@ impl NetworkMonitor {
             avg_dl: 0.0,
             avg_ul: 0.0,
             sample_count: 0,
+            history_size,
         })
     }
 
@@ -160,7 +232,7 @@ impl NetworkMonitor {
         let cur_time = Instant::now();
 
         let elapsed = cur_time.duration_since(self.prev_time).as_secs_f64();
-        
+
         if elapsed < 0.001 {
             return Ok(BandwidthStats {
                 download_bps: 0.0,
@@ -172,29 +244,27 @@ impl NetworkMonitor {
 
         let dl_bytes = cur_rx.saturating_sub(self.prev_rx);
         let ul_bytes = cur_tx.saturating_sub(self.prev_tx);
-
-        let dl_bps = (dl_bytes as f64) / elapsed;
-        let ul_bps = (ul_bytes as f64) / elapsed;
+        let dl_bps = dl_bytes as f64 / elapsed;
+        let ul_bps = ul_bytes as f64 / elapsed;
 
         self.prev_rx = cur_rx;
         self.prev_tx = cur_tx;
         self.prev_time = cur_time;
 
-        // Update history
-        if self.history_dl.len() >= self.history_dl.capacity() {
+        // Maintain capped history (pop before push to avoid over-alloc).
+        if self.history_dl.len() >= self.history_size {
             self.history_dl.pop_front();
         }
         self.history_dl.push_back(dl_bps);
 
-        if self.history_ul.len() >= self.history_ul.capacity() {
+        if self.history_ul.len() >= self.history_size {
             self.history_ul.pop_front();
         }
         self.history_ul.push_back(ul_bps);
 
-        // Update statistics
+        // Running peak & Welford online average.
         self.peak_dl = self.peak_dl.max(dl_bps);
         self.peak_ul = self.peak_ul.max(ul_bps);
-
         self.sample_count += 1;
         self.avg_dl += (dl_bps - self.avg_dl) / self.sample_count as f64;
         self.avg_ul += (ul_bps - self.avg_ul) / self.sample_count as f64;
@@ -207,388 +277,332 @@ impl NetworkMonitor {
         })
     }
 
-    fn get_history_dl(&self) -> Vec<f64> {
-        self.history_dl.iter().copied().collect()
-    }
-
-    fn get_history_ul(&self) -> Vec<f64> {
-        self.history_ul.iter().copied().collect()
-    }
+    fn history_dl(&self) -> Vec<f64> { self.history_dl.iter().copied().collect() }
+    fn history_ul(&self) -> Vec<f64> { self.history_ul.iter().copied().collect() }
 }
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+
+fn format_bps(bytes: f64) -> String {
+    const UNITS: &[&str] = &["B/s", "KB/s", "MB/s", "GB/s"];
+    let mut v = bytes;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 { v /= 1024.0; i += 1; }
+    format!("{:>7.2} {}", v, UNITS[i])
+}
+
+fn format_total(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut v = bytes as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 { v /= 1024.0; i += 1; }
+    format!("{:.2} {}", v, UNITS[i])
+}
+
+// ── Interface helpers ─────────────────────────────────────────────────────────
 
 fn list_interfaces() -> Result<()> {
     let networks = Networks::new_with_refreshed_list();
-    
-    println!("\n{}", style_text("Available Network Interfaces:", Color::Cyan, true));
-    println!("{}", "─".repeat(80));
-
+    println!("\n{}", style_text("Available Network Interfaces:", COL_CYAN, true));
+    println!("{}", "─".repeat(60));
     for (name, data) in networks.iter() {
         println!(
             "  {} {}",
-            style_text(name, Color::White, true),
+            style_text(name, COL_WHITE, true),
             style_text(
-                &format!("(RX: {} bytes, TX: {} bytes)", 
-                    data.total_received(), 
-                    data.total_transmitted()
-                ),
-                Color::DarkGrey,
-                false
+                &format!("(RX: {} bytes, TX: {} bytes)",
+                    data.total_received(), data.total_transmitted()),
+                COL_GREY, false
             )
         );
     }
     println!();
-
     Ok(())
 }
 
 fn select_best_interface() -> Result<String> {
-    let networks = Networks::new_with_refreshed_list();
-    
-    networks
+    Networks::new_with_refreshed_list()
         .iter()
-        .max_by_key(|(_, data)| data.total_received() + data.total_transmitted())
+        .max_by_key(|(_, d)| d.total_received() + d.total_transmitted())
         .map(|(name, _)| name.clone())
         .context("No network interfaces found")
 }
 
 fn resolve_interface(pattern: &str) -> Result<String> {
     let networks = Networks::new_with_refreshed_list();
-    let interfaces: Vec<String> = networks.iter().map(|(name, _)| name.clone()).collect();
-    
-    // 1. Exact match
-    if interfaces.iter().any(|name| name == pattern) {
+    let all: Vec<String> = networks.iter().map(|(n, _)| n.clone()).collect();
+
+    // 1. Exact match.
+    if all.iter().any(|n| n == pattern) {
         return Ok(pattern.to_string());
     }
-    
-    // 2. Case-insensitive partial match
-    let pattern_lower = pattern.to_lowercase();
-    let matches: Vec<String> = interfaces
-        .iter()
-        .filter(|name| name.to_lowercase().contains(&pattern_lower))
+
+    // 2. Case-insensitive partial match.
+    let low = pattern.to_lowercase();
+    let mut matches: Vec<String> = all.iter()
+        .filter(|n| n.to_lowercase().contains(&low))
         .cloned()
         .collect();
-    
+
     if matches.is_empty() {
         anyhow::bail!(
-            "No interface matches '{}'. Available interfaces:\n{}",
-            pattern,
-            interfaces.join("\n")
+            "No interface matches '{}'. Available:\n{}", pattern, all.join("\n")
         );
     }
-    
-    if matches.len() == 1 {
-        return Ok(matches[0].clone());
-    }
-    
-    // Multiple matches - return the shortest one (most specific)
-    Ok(matches
-        .into_iter()
-        .min_by_key(|s| s.len())
-        .unwrap())
+
+    matches.sort_by_key(|s| s.len());
+    Ok(matches.remove(0))
 }
 
-fn format_bytes(bytes: f64) -> String {
-    const UNITS: &[&str] = &["B/s", "KB/s", "MB/s", "GB/s"];
-    let mut value = bytes;
-    let mut unit_idx = 0;
+// ── Chart rendering ───────────────────────────────────────────────────────────
 
-    while value >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit_idx += 1;
-    }
-
-    format!("{:>7.2} {}", value, UNITS[unit_idx])
-}
-
-fn format_total_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit_idx = 0;
-
-    while value >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit_idx += 1;
-    }
-
-    format!("{:.2} {}", value, UNITS[unit_idx])
-}
-
-fn style_text(text: &str, color: Color, bold: bool) -> String {
-    if bold {
-        format!("\x1b[1m\x1b[38;5;{}m{}\x1b[0m", color_to_256(color), text)
-    } else {
-        format!("\x1b[38;5;{}m{}\x1b[0m", color_to_256(color), text)
-    }
-}
-
-fn color_to_256(color: Color) -> u8 {
-    match color {
-        Color::Cyan => 51,
-        Color::Yellow => 226,
-        Color::White => 15,
-        Color::DarkGrey => 240,
-        Color::Green => 46,
-        Color::Magenta => 201,
-        _ => 15,
-    }
-}
-
-/// Render chart using custom rasciichart library
-fn render_chart_rasciichart(
-    data: &[f64],
-    height: usize,
-    width: usize,
-    color: Color,
-    label: &str,
-) -> String {
+/// Render one chart, writing directly to stdout line-by-line.
+/// Each line is followed by \x1B[K (erase to EOL) to prevent stale chars
+/// when the terminal is wider than the chart.  No String allocation for the
+/// full frame — we stream line-by-line exactly like pingmon.rs does.
+fn print_chart(data: &[f64], height: usize, width: usize, color: u8, label: &str) {
     if data.is_empty() || height == 0 || width == 0 {
-        return String::new();
+        return;
     }
 
-    // Get the last `width` points for plotting
-    let start_idx = data.len().saturating_sub(width);
-    let plot_data: Vec<f64> = data[start_idx..].to_vec();
+    // Use the most recent `width` samples.
+    let start = data.len().saturating_sub(width);
+    let slice = &data[start..];
+    if slice.is_empty() { return; }
 
-    if plot_data.is_empty() {
-        return String::new();
-    }
-
-    // Configure rasciichart with proper width and height
     let config = Config::default()
         .with_height(height)
         .with_width(width)
         .with_labels(true)
         .with_label_format("{:.1}".to_string());
 
-    // Generate the chart
-    let chart = match plot_with_config(&plot_data, config) {
-        Ok(c) => c,
-        Err(e) => return format!("Chart error: {}", e),
-    };
+    match plot_with_config(slice, config) {
+        Err(e) => {
+            print!("{}", style_text(&format!("Chart error: {}", e), COL_WHITE, false));
+            clear_to_eol();
+            println!();
+        }
+        Ok(chart) => {
+            // Label line.
+            print!("{}", style_text(label, color, true));
+            clear_to_eol();
+            println!();
 
-    // Add color to the chart
-    let color_code = color_to_256(color);
-    let colored_chart: String = chart
-        .lines()
-        .map(|line| format!("\x1b[38;5;{}m{}\x1b[0m", color_code, line))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Add label
-    format!(
-        "{}\n{}",
-        style_text(label, color, true),
-        colored_chart
-    )
+            let lines: Vec<&str> = chart.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                print!("\x1b[38;5;{}m{}\x1b[0m", color, line);
+                clear_to_eol();
+                // Avoid trailing newline on last line — \x1B[J after the
+                // last chart already advances the cursor correctly.
+                if i < lines.len() - 1 {
+                    println!();
+                }
+            }
+        }
+    }
 }
 
-fn render_ui(
-    monitor: &NetworkMonitor,
-    stats: &BandwidthStats,
-    args: &Args,
-    term_width: u16,
-) -> Result<String> {
-    let mut output = String::new();
-    
-    // Calculate chart width based on terminal width
-    // Account for label width (approximately 10 chars) and margins
+// ── Main render frame ─────────────────────────────────────────────────────────
+
+/// Render one complete UI frame.  Uses the pingmon.rs technique:
+///   cursor_home → print lines with clear_to_eol → clear_to_eos → flush.
+/// This avoids alternate-screen issues and eliminates tearing.
+fn render_frame(monitor: &NetworkMonitor, stats: &BandwidthStats, args: &Args, term_width: u16) {
     let chart_width = if args.width > 0 {
         args.width
     } else {
-        // Auto-resize: terminal width minus labels and margins
-        term_width.saturating_sub(20).max(30) as usize
+        // Reserve ~12 chars for rasciichart's Y-axis labels and a small margin.
+        (term_width as usize).saturating_sub(14).max(20)
     };
 
-    // Header
-    output.push_str(&format!(
-        "{}\n",
-        style_text(
-            &format!("═══ Bandwidth Monitor ({}) ═══", monitor.interface),
-            Color::Cyan,
-            true
-        )
-    ));
+    cursor_home();
 
-    // Current speeds
-    output.push_str(&format!(
-        "{} {}  │  {} {}  {}\n",
-        style_text("Download:", Color::Cyan, true),
-        style_text(&format_bytes(stats.download_bps), Color::White, false),
-        style_text("Upload:", Color::Yellow, true),
-        style_text(&format_bytes(stats.upload_bps), Color::White, false),
-        style_text("Press 'q' or Ctrl+C to quit", Color::DarkGrey, false)
+    // ── Header ──
+    print!("{}", style_text(
+        &format!("═══ Bandwidth Monitor ({}) ═══", monitor.interface),
+        COL_CYAN, true,
     ));
+    clear_to_eol();
+    println!();
 
+    // ── Current speeds ──
+    print!("{} {}  │  {} {}  {}",
+        style_text("Download:", COL_CYAN, true),
+        style_text(&format_bps(stats.download_bps), COL_WHITE, false),
+        style_text("Upload:",   COL_YELLOW, true),
+        style_text(&format_bps(stats.upload_bps),   COL_WHITE, false),
+        style_text("Press 'q' or Ctrl+C to quit",   COL_GREY,  false),
+    );
+    clear_to_eol();
+    println!();
+
+    // ── Optional summary ──
     if args.summary {
-        output.push_str(&format!(
-            "{} {}  │  {} {}\n",
-            style_text("Peak DL:", Color::Cyan, false),
-            style_text(&format_bytes(monitor.peak_dl), Color::White, false),
-            style_text("Peak UL:", Color::Yellow, false),
-            style_text(&format_bytes(monitor.peak_ul), Color::White, false),
-        ));
-        output.push_str(&format!(
-            "{} {}  │  {} {}\n",
-            style_text("Avg DL:", Color::Cyan, false),
-            style_text(&format_bytes(monitor.avg_dl), Color::White, false),
-            style_text("Avg UL:", Color::Yellow, false),
-            style_text(&format_bytes(monitor.avg_ul), Color::White, false),
-        ));
-        output.push_str(&format!(
-            "{} {}  │  {} {}\n",
-            style_text("Total RX:", Color::Cyan, false),
-            style_text(&format_total_bytes(stats.total_rx), Color::White, false),
-            style_text("Total TX:", Color::Yellow, false),
-            style_text(&format_total_bytes(stats.total_tx), Color::White, false),
-        ));
-        output.push_str(&format!(
-            "{} {:.1}s\n",
-            style_text("Runtime:", Color::Green, false),
-            monitor.start_time.elapsed().as_secs_f64()
-        ));
+        print!("{} {}  │  {} {}",
+            style_text("Peak DL:", COL_CYAN, false),
+            style_text(&format_bps(monitor.peak_dl), COL_WHITE, false),
+            style_text("Peak UL:", COL_YELLOW, false),
+            style_text(&format_bps(monitor.peak_ul), COL_WHITE, false),
+        );
+        clear_to_eol();
+        println!();
+
+        print!("{} {}  │  {} {}",
+            style_text("Avg DL:", COL_CYAN, false),
+            style_text(&format_bps(monitor.avg_dl), COL_WHITE, false),
+            style_text("Avg UL:", COL_YELLOW, false),
+            style_text(&format_bps(monitor.avg_ul), COL_WHITE, false),
+        );
+        clear_to_eol();
+        println!();
+
+        print!("{} {}  │  {} {}",
+            style_text("Total RX:", COL_CYAN, false),
+            style_text(&format_total(stats.total_rx), COL_WHITE, false),
+            style_text("Total TX:", COL_YELLOW, false),
+            style_text(&format_total(stats.total_tx), COL_WHITE, false),
+        );
+        clear_to_eol();
+        println!();
+
+        print!("{} {:.1}s",
+            style_text("Runtime:", COL_GREEN, false),
+            monitor.start_time.elapsed().as_secs_f64(),
+        );
+        clear_to_eol();
+        println!();
     }
 
-    output.push('\n');
+    // Blank separator line.
+    clear_to_eol();
+    println!();
 
-    // Charts using rasciichart
     let show_both = !args.download && !args.upload;
 
+    // ── Download chart ──
     if args.download || show_both {
-        let dl_history = monitor.get_history_dl();
-        if !dl_history.is_empty() {
-            let chart = render_chart_rasciichart(
-                &dl_history,
-                args.height,
-                chart_width,
-                Color::Cyan,
-                "▼ Download Speed",
-            );
-            output.push_str(&chart);
-            output.push_str("\n\n");
+        let dl = monitor.history_dl();
+        if !dl.is_empty() {
+            print_chart(&dl, args.height, chart_width, COL_CYAN, "▼ Download Speed");
+            println!();
+            clear_to_eol();
+            println!();
         }
     }
 
-    if (args.upload || show_both) && !args.download {
-        let ul_history = monitor.get_history_ul();
-        if !ul_history.is_empty() {
-            let chart = render_chart_rasciichart(
-                &ul_history,
-                args.height,
-                chart_width,
-                Color::Yellow,
-                "▲ Upload Speed",
-            );
-            output.push_str(&chart);
-            output.push('\n');
+    // ── Upload chart ──
+    if args.upload || show_both {
+        let ul = monitor.history_ul();
+        if !ul.is_empty() {
+            print_chart(&ul, args.height, chart_width, COL_YELLOW, "▲ Upload Speed");
+            // No trailing newline — clear_to_eos handles the rest.
         }
     }
 
-    Ok(output)
+    // Erase everything below the last printed line.  This is the key
+    // technique that replaces the broken resize_with(term_height, …) padding.
+    clear_to_eos();
+    flush();
 }
 
+// ── Monitor loop ──────────────────────────────────────────────────────────────
+
 fn monitor_bandwidth(args: Args) -> Result<()> {
-    let interface = if let Some(iface) = args.iface.clone() {
-        resolve_interface(&iface)?
+    let interface = if let Some(ref iface) = args.iface {
+        resolve_interface(iface)?
     } else {
         select_best_interface()?
     };
 
-    println!("Monitoring interface: {}\n", style_text(&interface, Color::Cyan, true));
+    println!("Monitoring interface: {}\n",
+        style_text(&interface, COL_CYAN, true));
 
-    let monitor = Arc::new(Mutex::new(NetworkMonitor::new(interface, args.history)?));
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
+    // Ctrl-C handler — disables raw mode before exiting so the terminal is
+    // never left in a broken state.
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
     })?;
 
-    let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, Hide)?;
+    // Clear screen once — no alternate screen buffer.
+    clear_screen();
+    flush();
+
+    // Enter raw mode only for keyboard input; NOT for rendering.
+    // This is why pingmon.rs works: it never calls enable_raw_mode() because
+    // it only needs Ctrl-C (handled by ctrlc crate) and 'q'.  We enter raw
+    // mode here only to catch 'q' and Esc, and we wrap everything in a
+    // cleanup guard so raw mode is always disabled on exit.
     enable_raw_mode()?;
 
-    let result = (|| -> Result<()> {
-        let mut last_update = Instant::now();
+    let mut monitor = NetworkMonitor::new(interface, args.history)?;
+    let mut last_update = Instant::now();
 
-        while running.load(Ordering::SeqCst) {
-            // Check for key events (non-blocking)
+    // Warm-up: first sample sets baseline counters; discard it.
+    let _ = monitor.update();
+    last_update = Instant::now();
+
+    let result: Result<()> = (|| {
+        loop {
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // Non-blocking key poll (50 ms window — keeps UI responsive).
             if event::poll(Duration::from_millis(50))? {
-                if let Event::Key(key_event) = event::read()? {
-                    match key_event.code {
+                if let Event::Key(key) = event::read()? {
+                    match key.code {
                         KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
-                        KeyCode::Char('c') => {
-                            use crossterm::event::KeyModifiers;
-                            if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                break;
-                            }
-                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                         _ => {}
                     }
                 }
             }
 
-            // Update bandwidth stats with accurate timing
             if last_update.elapsed() >= INTERVAL {
-                // Lock monitor untuk update - mencegah race condition
-                let stats = {
-                    let mut mon = monitor.lock().unwrap();
-                    mon.update()?
-                };
+                let stats = monitor.update()?;
 
-                // Get terminal size - ini bisa berubah karena resize
-                let (term_width, term_height) = size()?;
+                // Re-read terminal size each frame — handles live resizing.
+                let (term_width, _) = size()?;
 
-                // Render UI dengan data terbaru
-                let ui = {
-                    let mon = monitor.lock().unwrap();
-                    render_ui(&mon, &stats, &args, term_width)?
-                };
-
-                let mut lines: Vec<String> = ui.lines().map(str::to_owned).collect();
-
-                // Resize output to fit terminal height
-                lines.resize_with(term_height as usize, String::new);
-
-                let full_output = lines.join("\n");
-
-                // Write to screen
-                execute!(
-                    stdout,
-                    MoveTo(0, 0),
-                    Print(full_output)
-                )?;
-                stdout.flush()?;
-
+                render_frame(&monitor, &stats, &args, term_width);
                 last_update = Instant::now();
             }
         }
         Ok(())
     })();
 
-    // Cleanup
-    disable_raw_mode()?;
-    execute!(stdout, LeaveAlternateScreen, Show)?;
+    // ── Always restore terminal ───────────────────────────────────────────────
+    // Disable raw mode unconditionally.  We intentionally do NOT use an
+    // alternate screen, so there is nothing to "leave" — the terminal
+    // naturally returns to the normal scroll buffer on process exit.
+    let _ = disable_raw_mode();
+
+    // Print a clean exit message below the last render.
+    println!("\n{}", style_text("Stopped cleanly.", COL_GREEN, true));
 
     if let Err(e) = result {
         eprintln!("Error: {}", e);
-    } else {
-        println!("\n{}", style_text("Stopped cleanly.", Color::Green, true));
+        std::process::exit(1);
     }
 
     Ok(())
 }
 
+// ── Entry point ───────────────────────────────────────────────────────────────
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.version {
-        println!("{}", ColoredVersion::new());
+        println!("{}", ColoredVersion);
         return Ok(());
     }
-    
+
     if args.list {
-        list_interfaces()?;
-        return Ok(());
+        return list_interfaces();
     }
 
     monitor_bandwidth(args)
