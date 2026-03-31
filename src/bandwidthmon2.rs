@@ -479,7 +479,7 @@ fn render_ui(
         style_text(&format_bytes(stats.download_bps), Color::White, false),
         style_text("Upload:", Color::Yellow, true),
         style_text(&format_bytes(stats.upload_bps), Color::White, false),
-        style_text("Press 'q' or Ctrl+C to quit", Color::DarkGrey, false)
+        style_text("'q'/Ctrl+C=quit", Color::DarkGrey, false)
     ));
 
     if args.summary {

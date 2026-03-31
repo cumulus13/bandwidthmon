@@ -2,6 +2,30 @@
 //! Bandwidth Monitor - robust, production-ready, cross-platform
 //! Author: Hadi Cahyadi <cumulus13@gmail.com>
 //! License: MIT
+//! [package]
+//! name = "bandwidthmon"
+//! version = "0.1.17"
+//! edition = "2024"
+//! rust-version = "1.86"
+//! authors = [
+//!     "Hadi Cahyadi <cumulus13@gmail.com>",
+//! ]
+//! description = "Real-time network bandwidth monitor with beautiful ASCII charts"
+//! license = "MIT"
+//! repository = "https://!github.com/cumulus13/bandwidthmon"
+//! homepage = "https://!github.com/cumulus13/bandwidthmon"
+//! documentation = "https://!docs.rs/bandwidthmon"
+//! keywords = [
+//!     "network",
+//!     "bandwidth",
+//!     "monitor",
+//!     "terminal",
+//!     "cli",
+//! ]
+//! categories = [
+//!     "command-line-utilities",
+//!     "network-programming",
+//! ]
 //!
 //! ── WHAT WAS BROKEN AND WHY ──────────────────────────────────────────────────
 //!
