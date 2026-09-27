@@ -49,3 +49,9 @@ bandwidthmon2.exe
 
 # Added entries (1 items)
 temp/
+
+# Added entries (1 items)
+downloads/
+
+# Added entries (1 items)
+*.patch

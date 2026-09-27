@@ -53,6 +53,20 @@
 //!          FIX: drop alternate screen entirely; use cursor_home + clear_to_eol
 //!          per line + clear_to_eos at end, identical to pingmon.rs.
 //!
+//! BUG 5 — THE LINUX "CHAOS" BUG. enable_raw_mode() on Unix clears the termios
+//!          OPOST flag, which is what normally translates a bare '\n' (LF) into
+//!          '\r\n' (CR+LF) on output. Windows consoles don't need OPOST for
+//!          this — WriteConsole always returns the cursor to column 0 on LF —
+//!          so the bug is invisible on Windows and total chaos on Linux/macOS:
+//!          every println!() during the render loop moved the cursor down one
+//!          row WITHOUT resetting the column, so each line started one column
+//!          further right than the last, producing the staircase/garbled
+//!          output. This is a well-known crossterm/termios raw-mode gotcha.
+//!          FIX: never emit a bare '\n' while raw mode is enabled. Every
+//!          line-ending print!()/println!() in the render path now emits
+//!          "\r\n" explicitly, which is correct in both raw and cooked mode
+//!          and on both platforms.
+//!
 //! ─────────────────────────────────────────────────────────────────────────────
 
 use anyhow::{Context, Result};
@@ -307,7 +321,7 @@ fn list_interfaces() -> Result<()> {
             styled(&format!("(RX: {} bytes, TX: {} bytes)",
                 data.total_received(), data.total_transmitted()), C_GREY, false));
     }
-    println!();
+    print!("\r\n");
     Ok(())
 }
 
@@ -387,7 +401,7 @@ fn print_chart(data: &[f64], height: usize, plot_width: usize, col: u8, label: &
     // Label header line.
     print!("{}", styled(label, col, true));
     clear_to_eol();
-    println!();
+    print!("\r\n");
 
     match plot_with_config(slice, config) {
         Err(e) => {
@@ -400,7 +414,7 @@ fn print_chart(data: &[f64], height: usize, plot_width: usize, col: u8, label: &
             for (i, line) in lines.iter().enumerate() {
                 print!("\x1b[38;5;{}m{}\x1b[0m", col, line);
                 clear_to_eol();
-                if i < last_idx { println!(); }  // no newline on very last line
+                if i < last_idx { print!("\r\n"); }  // no newline on very last line
             }
         }
     }
@@ -421,40 +435,40 @@ fn render_frame(monitor: &NetworkMonitor, stats: &BandwidthStats, args: &Args) {
     print!("{}", styled(
         &format!("═══ Bandwidth Monitor ({}) ═══", monitor.interface),
         C_CYAN, true));
-    clear_to_eol(); println!();
+    clear_to_eol(); print!("\r\n");
 
     // ── Current speeds ───────────────────────────────────────────────────────
     print!("{} {}  │  {} {}  {}",
         styled("Download:", C_CYAN,   true), styled(&fmt_bps(stats.download_bps), C_WHITE, false),
         styled("Upload:",   C_YELLOW, true), styled(&fmt_bps(stats.upload_bps),   C_WHITE, false),
         styled("'q'/Ctrl-C to quit", C_GREY, false));
-    clear_to_eol(); println!();
+    clear_to_eol(); print!("\r\n");
 
     // ── Summary (optional) ───────────────────────────────────────────────────
     if args.summary {
         print!("{} {}  │  {} {}",
             styled("Peak DL:", C_CYAN,   false), styled(&fmt_bps(monitor.peak_dl), C_WHITE, false),
             styled("Peak UL:", C_YELLOW, false), styled(&fmt_bps(monitor.peak_ul), C_WHITE, false));
-        clear_to_eol(); println!();
+        clear_to_eol(); print!("\r\n");
 
         print!("{} {}  │  {} {}",
             styled("Avg DL:", C_CYAN,   false), styled(&fmt_bps(monitor.avg_dl), C_WHITE, false),
             styled("Avg UL:", C_YELLOW, false), styled(&fmt_bps(monitor.avg_ul), C_WHITE, false));
-        clear_to_eol(); println!();
+        clear_to_eol(); print!("\r\n");
 
         print!("{} {}  │  {} {}",
             styled("Total RX:", C_CYAN,   false), styled(&fmt_total(stats.total_rx), C_WHITE, false),
             styled("Total TX:", C_YELLOW, false), styled(&fmt_total(stats.total_tx), C_WHITE, false));
-        clear_to_eol(); println!();
+        clear_to_eol(); print!("\r\n");
 
         print!("{} {:.1}s",
             styled("Runtime:", C_GREEN, false),
             monitor.start_time.elapsed().as_secs_f64());
-        clear_to_eol(); println!();
+        clear_to_eol(); print!("\r\n");
     }
 
     // Blank separator.
-    clear_to_eol(); println!();
+    clear_to_eol(); print!("\r\n");
 
     let show_both = !args.download && !args.upload;
 
@@ -464,7 +478,7 @@ fn render_frame(monitor: &NetworkMonitor, stats: &BandwidthStats, args: &Args) {
         if !dl.is_empty() {
             let pw = safe_plot_width(args.width, dl.len(), tw);
             print_chart(&dl, args.height, pw, C_CYAN, "▼ Download Speed");
-            println!(); clear_to_eol(); println!();
+            print!("\r\n"); clear_to_eol(); print!("\r\n");
         }
     }
 

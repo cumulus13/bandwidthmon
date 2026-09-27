@@ -590,7 +590,14 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
                 // Pastikan tepat term_height baris
                 lines.resize_with(term_height as usize, String::new);
 
-                let full_output = lines.join("\n");
+                // Raw mode (enabled below) clears the Unix OPOST termios flag,
+                // so a bare '\n' becomes a line-feed WITHOUT a carriage return.
+                // Windows consoles don't need OPOST for that, so this was
+                // invisible on Windows and produced the Linux "staircase"
+                // chaos: every row printed one column further right than the
+                // last. Joining with "\r\n" instead fixes it on every
+                // platform, in both raw and cooked mode.
+                let full_output = lines.join("\r\n");
 
                 queue!(
                     stdout,
