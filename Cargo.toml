@@ -6,7 +6,7 @@ bin = [
 
 [package]
 name = "bandwidthmon"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2024"
 rust-version = "1.86"
 authors = [
@@ -56,8 +56,10 @@ term_size = "0.3.2"
 sysinfo = "0.36"
 rasciichart = "0.2.16"
 anyhow = "1.0"
-ctrlc = "3.5"
+ctrlc = { version = "3.5", features = ["termination"] }
 regex = "1"
+clap-version-flag = "1.0.7"
+clap-color-help = "0.1.3"
 
 [dependencies.clap]
 version = "4.5"

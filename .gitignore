@@ -55,3 +55,16 @@ downloads/
 
 # Added entries (1 items)
 *.patch
+
+# Added entries (1 items)
+.tar2ignore
+
+# Added entries (1 items)
+*.bak
+
+# Added entries (2 items)
+target/
+tmp*
+
+# Added entries (1 items)
+gitignore_backup/

@@ -3,25 +3,24 @@
 //! License: MIT
 
 use anyhow::{Context, Result};
+#[path = "term_ui.rs"]
+mod term_ui;
+
 use clap::Parser;
 use clap::ArgAction;
+use clap_version_flag::colorful_version;
+use clap_color_help::default_styles;
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode},
-    execute,
-    style::{Color, Print},
-    terminal::{
-        disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen,
-        LeaveAlternateScreen,
-    },
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    style::Color,
 };
 use rasciichart::{plot_with_config, Config};
 use std::collections::VecDeque;
-use std::io::{stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::Networks;
+use term_ui::Screen;
 use std::fmt;
 
 const INTERVAL: Duration = Duration::from_secs(1);
@@ -55,14 +54,15 @@ impl fmt::Display for ColoredVersion {
     // long_about = None,
     // version = ColoredVersion::new().as_str()
     about = "Cross-platform bandwidth monitor with rasciichart",
-    disable_version_flag = true
+    disable_version_flag = true,
+    styles = default_styles()
 )]
 struct Args {
     /// Network interface to monitor (auto-select if not specified)
     #[arg(short, long)]
     iface: Option<String>,
 
-    /// Chart height in lines
+    /// Chart height in lines (shrunk automatically to fit the terminal)
     #[arg(short = 'H', long, default_value_t = DEFAULT_HEIGHT)]
     height: usize,
 
@@ -89,6 +89,14 @@ struct Args {
     /// Maximum history points
     #[arg(long, default_value_t = DEFAULT_HISTORY)]
     history: usize,
+
+    /// Plain output: one text line per second (auto when there is no TTY)
+    #[arg(long)]
+    plain: bool,
+
+    /// Force ASCII-only drawing (auto when the locale/TERM is not UTF-8)
+    #[arg(long)]
+    ascii: bool,
 
     #[arg(short = 'v', short = 'V', long = "version", action = ArgAction::SetTrue)]
     version: bool,
@@ -337,11 +345,7 @@ fn format_total_bytes(bytes: u64) -> String {
 }
 
 fn style_text(text: &str, color: Color, bold: bool) -> String {
-    if bold {
-        format!("\x1b[1m\x1b[38;5;{}m{}\x1b[0m", color_to_256(color), text)
-    } else {
-        format!("\x1b[38;5;{}m{}\x1b[0m", color_to_256(color), text)
-    }
+    term_ui::styled(text, color_to_256(color), bold)
 }
 
 fn color_to_256(color: Color) -> u8 {
@@ -369,7 +373,9 @@ fn render_chart_rasciichart(
         return String::new();
     }
 
-    // Get the last `width` points for plotting
+    // Never wider than the data: rasciichart right-aligns inside its canvas, so
+    // with_width(terminal budget) on few samples = pages of leading blanks.
+    let width = width.min(data.len()).max(1);
     let start_idx = data.len().saturating_sub(width);
     let plot_data: Vec<f64> = data[start_idx..].to_vec();
 
@@ -394,7 +400,7 @@ fn render_chart_rasciichart(
     let color_code = color_to_256(color);
     let colored_chart: String = chart
         .lines()
-        .map(|line| format!("\x1b[38;5;{}m{}\x1b[0m", color_code, line))
+        .map(|line| term_ui::styled(line, color_code, false))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -406,108 +412,159 @@ fn render_chart_rasciichart(
     )
 }
 
-fn render_ui(
-    monitor: &NetworkMonitor,
-    stats: &BandwidthStats,
-    args: &Args,
-    term_width: u16,
-) -> Result<String> {
-    let mut output = String::new();
-    
-    // Calculate chart width based on terminal width
-    // Account for label width (approximately 10 chars) and margins
+/// Whole UI as one string ('\n'-separated). Screen::draw() clips/draws it.
+fn render_ui(monitor: &NetworkMonitor, stats: &BandwidthStats, args: &Args) -> String {
+    let (term_width, rows) = term_ui::term_size();
+    let both = !args.download && !args.upload;
+    let show_dl = args.download || both;
+    let show_ul = args.upload || both;
+    let charts = show_dl as usize + show_ul as usize;
+    let (height, show_summary) =
+        term_ui::fit_chart_height(rows, args.height, charts, args.summary, 2);
     let chart_width = if args.width > 0 {
         args.width
     } else {
-        // Auto-resize: terminal width minus labels and margins
-        term_width.saturating_sub(20).max(30) as usize
+        term_width.saturating_sub(20).max(30)
     };
 
-    // Header
-    output.push_str(&format!(
-        "{}\n",
-        style_text(
-            &format!("═══ Bandwidth Monitor ({}) ═══", monitor.interface),
-            Color::Cyan,
-            true
-        )
+    let mut l: Vec<String> = Vec::new();
+
+    l.push(style_text(
+        &format!("═══ Bandwidth Monitor ({}) ═══", monitor.interface),
+        Color::Cyan,
+        true,
     ));
 
-    // Current speeds
-    output.push_str(&format!(
-        "{} {}  │  {} {}  {}\n",
+    let hint = if term_width >= 78 {
+        "'q'/Ctrl+C=quit"
+    } else if term_width >= 56 {
+        "q=quit"
+    } else {
+        ""
+    };
+    l.push(format!(
+        "{} {}  │  {} {}  {}",
         style_text("Download:", Color::Cyan, true),
         style_text(&format_bytes(stats.download_bps), Color::White, false),
         style_text("Upload:", Color::Yellow, true),
         style_text(&format_bytes(stats.upload_bps), Color::White, false),
-        style_text("'q'/Ctrl+C=quit", Color::DarkGrey, false)
+        style_text(hint, Color::DarkGrey, false)
     ));
 
-    if args.summary {
-        output.push_str(&format!(
-            "{} {}  │  {} {}\n",
+    if show_summary {
+        l.push(format!(
+            "{} {}  │  {} {}",
             style_text("Peak DL:", Color::Cyan, false),
             style_text(&format_bytes(monitor.peak_dl), Color::White, false),
             style_text("Peak UL:", Color::Yellow, false),
             style_text(&format_bytes(monitor.peak_ul), Color::White, false),
         ));
-        output.push_str(&format!(
-            "{} {}  │  {} {}\n",
+        l.push(format!(
+            "{} {}  │  {} {}",
             style_text("Avg DL:", Color::Cyan, false),
             style_text(&format_bytes(monitor.avg_dl), Color::White, false),
             style_text("Avg UL:", Color::Yellow, false),
             style_text(&format_bytes(monitor.avg_ul), Color::White, false),
         ));
-        output.push_str(&format!(
-            "{} {}  │  {} {}\n",
+        l.push(format!(
+            "{} {}  │  {} {}",
             style_text("Total RX:", Color::Cyan, false),
             style_text(&format_total_bytes(stats.total_rx), Color::White, false),
             style_text("Total TX:", Color::Yellow, false),
             style_text(&format_total_bytes(stats.total_tx), Color::White, false),
         ));
-        output.push_str(&format!(
-            "{} {:.1}s\n",
+        l.push(format!(
+            "{} {:.1}s",
             style_text("Runtime:", Color::Green, false),
             monitor.start_time.elapsed().as_secs_f64()
         ));
     }
 
-    output.push('\n');
+    l.push(String::new());
 
-    // Charts using rasciichart
-    let show_both = !args.download && !args.upload;
-
-    if args.download || show_both {
-        let dl_history = monitor.get_history_dl();
-        if !dl_history.is_empty() {
-            let chart = render_chart_rasciichart(
-                &dl_history,
-                args.height,
-                chart_width,
-                Color::Cyan,
-                "▼ Download Speed",
-            );
-            output.push_str(&chart);
-            output.push_str("\n\n");
+    if show_dl {
+        let dl = monitor.get_history_dl();
+        if !dl.is_empty() {
+            l.push(render_chart_rasciichart(&dl, height, chart_width, Color::Cyan, "▼ Download Speed").trim_end_matches('\n').to_string());
+        }
+        if show_ul {
+            l.push(String::new());
+        }
+    }
+    if show_ul {
+        let ul = monitor.get_history_ul();
+        if !ul.is_empty() {
+            l.push(render_chart_rasciichart(&ul, height, chart_width, Color::Yellow, "▲ Upload Speed").trim_end_matches('\n').to_string());
         }
     }
 
-    if (args.upload || show_both) && !args.download {
-        let ul_history = monitor.get_history_ul();
-        if !ul_history.is_empty() {
-            let chart = render_chart_rasciichart(
-                &ul_history,
-                args.height,
-                chart_width,
-                Color::Yellow,
-                "▲ Upload Speed",
-            );
-            output.push_str(&chart);
-            output.push('\n');
+    l.join("\n")
+}
+
+fn run_loop(
+    monitor: &mut NetworkMonitor,
+    args: &Args,
+    running: &AtomicBool,
+    screen: &mut Option<Screen>,
+) -> Result<()> {
+    let mut last_update = Instant::now();
+    let mut last_stats: Option<BandwidthStats> = None;
+    let mut redraw = screen.is_some(); // paint something immediately
+
+    while running.load(Ordering::SeqCst) {
+        if screen.is_some() {
+            if event::poll(Duration::from_millis(50))? {
+                match event::read()? {
+                    Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
+                        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => break,
+                        _ => {}
+                    },
+                    // ssh window resize: reflow right away instead of at the next tick
+                    Event::Resize(_, _) => redraw = true,
+                    _ => {}
+                }
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        if last_update.elapsed() >= INTERVAL {
+            let stats = monitor.update()?;
+            last_update = Instant::now();
+
+            if screen.is_some() {
+                last_stats = Some(stats);
+                redraw = true;
+            } else {
+                let line = term_ui::plain_line(
+                    &monitor.interface,
+                    monitor.start_time.elapsed().as_secs(),
+                    &format_bytes(stats.download_bps),
+                    &format_bytes(stats.upload_bps),
+                );
+                if !term_ui::emit_plain(&line) {
+                    break; // stdout closed (e.g. `| head`)
+                }
+            }
+        }
+
+        if redraw {
+            if let Some(s) = screen.as_mut() {
+                let frame = match &last_stats {
+                    Some(st) => render_ui(monitor, st, args),
+                    None => format!(
+                        "{}\n{}",
+                        style_text(&format!("═══ Bandwidth Monitor ({}) ═══", monitor.interface), Color::Cyan, true),
+                        style_text("collecting first sample…  (q to quit)", Color::DarkGrey, false)
+                    ),
+                };
+                s.draw(&frame)?;
+            }
+            redraw = false;
         }
     }
-
-    Ok(output)
+    Ok(())
 }
 
 fn monitor_bandwidth(args: Args) -> Result<()> {
@@ -517,104 +574,43 @@ fn monitor_bandwidth(args: Args) -> Result<()> {
         select_best_interface()?
     };
 
-    println!(
-        "{} {}\n", 
-        style_text("Monitoring interface:", Color::Green, false),
-        style_text(&interface, Color::Cyan, true)
-    );
-
-    let monitor = Arc::new(Mutex::new(NetworkMonitor::new(interface, args.history)?));
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
+    // "termination" feature: SIGTERM/SIGHUP (ssh drop) also stop cleanly.
+    ctrlc::set_handler(move || r.store(false, Ordering::SeqCst))?;
 
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    })?;
+    let mut monitor = NetworkMonitor::new(interface, args.history)?;
 
-    let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, Hide)?;
-    enable_raw_mode()?;
+    let mut screen = Screen::try_enter(args.plain);
+    if screen.is_none() {
+        eprintln!(
+            "{} {}  (plain mode, Ctrl-C to stop)",
+            style_text("Monitoring interface:", Color::Green, false),
+            style_text(&monitor.interface, Color::Cyan, true)
+        );
+    }
 
-    let result = (|| -> Result<()> {
-        let mut last_update = Instant::now();
+    let result = run_loop(&mut monitor, &args, &running, &mut screen);
 
-        while running.load(Ordering::SeqCst) {
-            // Check for key events (non-blocking)
-            if event::poll(Duration::from_millis(50))? {
-                if let Event::Key(key_event) = event::read()? {
-                    match key_event.code {
-                        KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
-                        KeyCode::Char('c') => {
-                            use crossterm::event::KeyModifiers;
-                            if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            // Update bandwidth stats with accurate timing
-            if last_update.elapsed() >= INTERVAL {
-                // Lock monitor untuk update - mencegah race condition
-                let stats = {
-                    let mut mon = monitor.lock().unwrap();
-                    mon.update()?
-                };
-
-                // Get terminal size - ini bisa berubah karena resize
-                let (term_width, term_height) = size()?;
-
-                // Render UI dengan data terbaru
-                let ui = {
-                    let mon = monitor.lock().unwrap();
-                    render_ui(&mon, &stats, &args, term_width)?
-                };
-
-                let mut lines: Vec<String> = ui.lines().map(str::to_owned).collect();
-
-                // Resize output to fit terminal height
-                lines.resize_with(term_height as usize, String::new);
-
-                // Raw mode (enabled below) clears the Unix OPOST termios flag,
-                // so a bare '\n' becomes a line-feed WITHOUT a carriage return.
-                // Windows consoles don't need OPOST for that, so this was
-                // invisible on Windows and produced the Linux "staircase"
-                // chaos: every row printed one column further right than the
-                // last. Joining with "\r\n" instead fixes it on every
-                // platform, in both raw and cooked mode.
-                let full_output = lines.join("\r\n");
-
-                // Write to screen
-                execute!(
-                    stdout,
-                    MoveTo(0, 0),
-                    Print(full_output)
-                )?;
-                stdout.flush()?;
-
-                last_update = Instant::now();
-            }
-        }
-        Ok(())
-    })();
-
-    // Cleanup
-    disable_raw_mode()?;
-    execute!(stdout, LeaveAlternateScreen, Show)?;
+    // Restore the terminal BEFORE printing anything else.
+    drop(screen);
 
     if let Err(e) = result {
         eprintln!("{} {}", style_text("Error:", Color::Red, true), e);
-    } else {
-        println!("\n{}", style_text("Stopped cleanly.", Color::Green, true));
+        std::process::exit(1);
     }
-
+    eprintln!("{}", style_text("Stopped cleanly.", Color::Green, true));
     Ok(())
 }
 
 fn main() -> Result<()> {
+    let os_args: Vec<String> = std::env::args().collect();
+    if os_args.len() == 2 && (os_args[1] == "-V" || os_args[1] == "--version") {
+        let version = colorful_version!();
+        version.print_and_exit();
+    }
     let args = Args::parse();
+    term_ui::init(args.ascii);
 
     if args.version {
         println!("{}", ColoredVersion::new());

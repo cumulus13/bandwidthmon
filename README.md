@@ -102,9 +102,18 @@ Options:
   -d, --download           Show download chart only
   -u, --upload             Show upload chart only
       --history <HISTORY>  Maximum history points [default: 120]
+      --plain              One text line per second instead of the full-screen UI
+      --ascii              Force ASCII-only drawing
   -h, --help               Print help
   -V, --version            Print version
 ```
+
+## Running over SSH
+
+- The chart height shrinks automatically to fit the terminal (24 rows works), lines are clipped to the terminal width, and each frame is sent in a single write, so it no longer scrolls, wraps or tears over slow links. Resizing the window reflows immediately.
+- `ssh host bandwidthmon` (no `-t`, no PTY) falls back to plain output, one line per second. Same for pipes/logs, or force it with `--plain`.
+- Non-UTF-8 locale or `TERM=vt100/dumb` switches to ASCII; `TERM` without 256 colours uses 16 colours; `NO_COLOR` disables colour. `--ascii` forces ASCII.
+- SIGINT, SIGTERM and SIGHUP (dropped ssh session) restore the terminal before exiting.
 
 ## Keyboard Controls
 
