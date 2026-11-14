@@ -390,9 +390,11 @@ fn build_frame(monitor: &NetworkMonitor, stats: &BandwidthStats, args: &Args) ->
     ));
 
     let hint = if cols >= 78 {
-        "'q'/Ctrl-C to quit"
-    } else if cols >= 56 {
+        "'q'/Ctrl+C to quit"
+    } else if cols <= 56 {
         "q=quit"
+    } else if cols <= 30 {
+        ""
     } else {
         ""
     };

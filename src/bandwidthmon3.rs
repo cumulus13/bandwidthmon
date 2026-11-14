@@ -437,8 +437,10 @@ fn render_ui(monitor: &NetworkMonitor, stats: &BandwidthStats, args: &Args) -> S
 
     let hint = if term_width >= 78 {
         "'q'/Ctrl+C=quit"
-    } else if term_width >= 56 {
+    } else if term_width <= 56 {
         "q=quit"
+    } else if term_width <= 30 {
+        ""
     } else {
         ""
     };
